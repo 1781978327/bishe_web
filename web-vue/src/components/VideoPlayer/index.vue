@@ -1,7 +1,7 @@
 <template>
   <div class="video-player" @click="handleClick">
     <div class="video-container" ref="videoContainer">
-      <!-- 有算法 WebSocket 时：画布显示算法端推送的帧；无 WS 时：直接播放 RTSP 对应的 HLS -->
+      <!-- 有算法 WebSocket 时：画布显示算法端推送的帧；无 WS 时：播放 RTSP 对应的 WebRTC / HLS -->
       <template v-if="algoWsEnabled">
         <canvas ref="canvas" :width="width" :height="height"></canvas>
       </template>
@@ -167,6 +167,12 @@ const HLS_RETRY_DELAY_MS = 1200
 const HLS_MAX_RETRIES = 8
 let hlsRetryTimer: number | null = null
 let hlsRetryCount = 0
+const WEBRTC_RETRY_DELAY_MS = 1200
+const WEBRTC_MAX_RETRIES = 8
+let webrtcRetryTimer: number | null = null
+let webrtcRetryCount = 0
+let webrtcPc: RTCPeerConnection | null = null
+let whepSessionUrl: string | null = null
 // 预警检测相关状态
 const hasAlert = ref(false) // 是否检测到预警事件
 const alertResults = ref<any[]>([]) // 预警检测结果
@@ -199,7 +205,11 @@ const handleVisibilityChange = () => {
     if (videoEl.value && props.isActive) {
       tryPlayVideo().then((played) => {
         if (!played) {
-          scheduleHlsRetry('页面恢复可见后播放失败')
+          if (isWebRtcMode.value) {
+            scheduleWebRtcRetry('页面恢复可见后播放失败')
+          } else {
+            scheduleHlsRetry('页面恢复可见后播放失败')
+          }
         }
       })
     }
@@ -212,6 +222,8 @@ const hasDetectionAlert = computed(() => {
 })
 
 const algoWsEnabled = computed(() => !!import.meta.env.VITE_ALGO_WS_URL)
+const streamProtocol = (((import.meta.env.VITE_STREAM_PROTOCOL as string | undefined) || 'hls')).toLowerCase()
+const isWebRtcMode = computed(() => !algoWsEnabled.value && streamProtocol === 'webrtc')
 
 const rtspToHlsUrl = (rtspUrl: string): string => {
   try {
@@ -225,10 +237,32 @@ const rtspToHlsUrl = (rtspUrl: string): string => {
   }
 }
 
+const rtspToWhepUrl = (rtspUrl: string): string => {
+  try {
+    const u = new URL(rtspUrl)
+    const host = u.hostname
+    const path = u.pathname.replace(/^\/+/, '')
+    if (!host || !path) return ''
+
+    const base = ((import.meta.env.VITE_WEBRTC_BASE_URL as string | undefined) || '').trim()
+    const webrtcBaseUrl = base ? base.replace(/\/+$/, '') : `http://${host}:8889`
+    return `${webrtcBaseUrl}/${path}/whep`
+  } catch {
+    return ''
+  }
+}
+
 const clearHlsRetryTimer = () => {
   if (hlsRetryTimer !== null) {
     window.clearTimeout(hlsRetryTimer)
     hlsRetryTimer = null
+  }
+}
+
+const clearWebRtcRetryTimer = () => {
+  if (webrtcRetryTimer !== null) {
+    window.clearTimeout(webrtcRetryTimer)
+    webrtcRetryTimer = null
   }
 }
 
@@ -238,7 +272,7 @@ const tryPlayVideo = async (): Promise<boolean> => {
     await videoEl.value.play()
     return true
   } catch (error) {
-    console.warn('[HLS] play() 失败:', error)
+    console.warn('[Player] play() 失败:', error)
     return false
   }
 }
@@ -259,6 +293,22 @@ const scheduleHlsRetry = (reason: string) => {
   }, HLS_RETRY_DELAY_MS)
 }
 
+const scheduleWebRtcRetry = (reason: string) => {
+  if (!props.isActive || !isWebRtcMode.value) return
+  if (webrtcRetryCount >= WEBRTC_MAX_RETRIES) {
+    console.error(`[WebRTC] ${reason}，达到最大重试次数(${WEBRTC_MAX_RETRIES})`)
+    return
+  }
+
+  webrtcRetryCount += 1
+  const currentRetry = webrtcRetryCount
+  clearWebRtcRetryTimer()
+  console.warn(`[WebRTC] ${reason}，${WEBRTC_RETRY_DELAY_MS}ms 后重试 (${currentRetry}/${WEBRTC_MAX_RETRIES})`)
+  webrtcRetryTimer = window.setTimeout(() => {
+    startWebRtcPlayback(true)
+  }, WEBRTC_RETRY_DELAY_MS)
+}
+
 const destroyHls = () => {
   if (hls.value) {
     try { hls.value.destroy() } catch {}
@@ -267,6 +317,130 @@ const destroyHls = () => {
   if (videoEl.value) {
     videoEl.value.removeAttribute('src')
     try { videoEl.value.load() } catch {}
+  }
+}
+
+const waitForIceGatheringComplete = (pc: RTCPeerConnection, timeoutMs = 3000): Promise<void> => {
+  if (pc.iceGatheringState === 'complete') {
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve) => {
+    const onStateChange = () => {
+      if (pc.iceGatheringState === 'complete') {
+        cleanup()
+      }
+    }
+    const cleanup = () => {
+      window.clearTimeout(timer)
+      pc.removeEventListener('icegatheringstatechange', onStateChange)
+      resolve()
+    }
+    const timer = window.setTimeout(cleanup, timeoutMs)
+    pc.addEventListener('icegatheringstatechange', onStateChange)
+  })
+}
+
+const cleanupWhepSession = () => {
+  if (!whepSessionUrl) return
+  const sessionUrl = whepSessionUrl
+  whepSessionUrl = null
+  fetch(sessionUrl, { method: 'DELETE' }).catch(() => {})
+}
+
+const destroyWebRtcPeer = () => {
+  if (webrtcPc) {
+    try { webrtcPc.close() } catch {}
+    webrtcPc = null
+  }
+
+  cleanupWhepSession()
+
+  if (videoEl.value && videoEl.value.srcObject) {
+    videoEl.value.srcObject = null
+  }
+}
+
+const startWebRtcPlayback = async (fromRetry = false) => {
+  if (!videoEl.value || !props.isActive || !isWebRtcMode.value) return
+  if (typeof RTCPeerConnection === 'undefined') {
+    console.error('[WebRTC] 当前浏览器不支持 RTCPeerConnection')
+    return
+  }
+
+  if (!fromRetry) {
+    clearWebRtcRetryTimer()
+    webrtcRetryCount = 0
+  }
+
+  const whepUrl = rtspToWhepUrl(props.camera.rtspUrl)
+  console.log('[WebRTC] whep url =', whepUrl, 'from rtsp =', props.camera.rtspUrl)
+  if (!whepUrl) {
+    console.warn('[WebRTC] 无法从 RTSP 地址生成 WHEP 地址:', props.camera.rtspUrl)
+    return
+  }
+
+  destroyWebRtcPeer()
+
+  const pc = new RTCPeerConnection({ iceServers: [] })
+  webrtcPc = pc
+  pc.addTransceiver('video', { direction: 'recvonly' })
+
+  pc.ontrack = async (event) => {
+    if (!videoEl.value) return
+    const mediaStream = event.streams[0] || new MediaStream([event.track])
+    videoEl.value.srcObject = mediaStream
+    const played = await tryPlayVideo()
+    if (!played) {
+      scheduleWebRtcRetry('WebRTC 建连成功但自动播放失败')
+      return
+    }
+    clearWebRtcRetryTimer()
+    webrtcRetryCount = 0
+  }
+
+  pc.onconnectionstatechange = () => {
+    if (!props.isActive || !isWebRtcMode.value || webrtcPc !== pc) return
+    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+      console.warn('[WebRTC] connectionState =', pc.connectionState)
+      destroyWebRtcPeer()
+      scheduleWebRtcRetry(`连接状态异常: ${pc.connectionState}`)
+    }
+  }
+
+  try {
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    await waitForIceGatheringComplete(pc)
+
+    const localSdp = pc.localDescription?.sdp
+    if (!localSdp) {
+      throw new Error('未生成本地 SDP')
+    }
+
+    const response = await fetch(whepUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: localSdp
+    })
+    if (!response.ok) {
+      throw new Error(`WHEP 握手失败: HTTP ${response.status}`)
+    }
+
+    const answerSdp = await response.text()
+    const locationHeader = response.headers.get('location')
+    if (locationHeader) {
+      whepSessionUrl = new URL(locationHeader, whepUrl).toString()
+    }
+
+    await pc.setRemoteDescription({
+      type: 'answer',
+      sdp: answerSdp
+    })
+  } catch (error) {
+    console.error('[WebRTC] 播放失败:', error)
+    destroyWebRtcPeer()
+    scheduleWebRtcRetry('WHEP 建连失败')
   }
 }
 
@@ -353,6 +527,12 @@ const stopHlsPlayback = () => {
   clearHlsRetryTimer()
   hlsRetryCount = 0
   destroyHls()
+}
+
+const stopWebRtcPlayback = () => {
+  clearWebRtcRetryTimer()
+  webrtcRetryCount = 0
+  destroyWebRtcPeer()
 }
 
 // 存储是否已经保存了当前的检测记录，避免重复保存
@@ -978,9 +1158,15 @@ const formatGroupBbox = (bbox: number[]): string => {
 const startStream = () => {
   console.log('启动视频流:', props.camera.id, props.camera.rtspUrl)
 
-  // 无算法 WS：直接播 HLS
+  // 无算法 WS：根据配置播放 WebRTC / HLS
   if (!algoWsEnabled.value) {
-    startHlsPlayback()
+    if (isWebRtcMode.value) {
+      stopHlsPlayback()
+      startWebRtcPlayback()
+    } else {
+      stopWebRtcPlayback()
+      startHlsPlayback()
+    }
     return
   }
   
@@ -1054,6 +1240,7 @@ watch(() => props.isActive, (newValue) => {
     // 当摄像头不再激活时，清除画面
     clearDisplay()
     stopHlsPlayback()
+    stopWebRtcPlayback()
   }
 })
 
@@ -1110,6 +1297,7 @@ onBeforeUnmount(() => {
     wsClient.removeMessageHandler(handleMessage)
   }
   stopHlsPlayback()
+  stopWebRtcPlayback()
   // 调用清理函数，断开ResizeObserver连接
   if (cleanupResizeObserver) {
     cleanupResizeObserver()

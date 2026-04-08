@@ -27,13 +27,23 @@ public class RknnController {
     /**
      * 开启推理
      * @param track 是否开启目标跟踪
+     * @param tracker 跟踪算法，可选：bytetrack / deepsort
      */
     @PostMapping("/inference/on")
-    public Result<Map<String, Object>> startInference(@RequestParam(defaultValue = "false") boolean track) {
+    public Result<Map<String, Object>> startInference(
+            @RequestParam(defaultValue = "false") boolean track,
+            @RequestParam(required = false) String tracker) {
         try {
-            log.info("开启推理, track={}", track);
-            Map<String, Object> result = rknnService.startInference(track);
+            log.info("开启推理, track={}, tracker={}", track, tracker);
+            Map<String, Object> result = rknnService.startInference(track, tracker);
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "开启推理失败");
+                return Result.error(statusCode, message);
+            }
             return Result.success(result);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
         } catch (Exception e) {
             log.error("开启推理失败", e);
             return Result.error(500, "开启推理失败: " + e.getMessage());
@@ -56,6 +66,68 @@ public class RknnController {
     }
 
     /**
+     * 设置目标跟踪开关（推理开启时即时生效）
+     * @param enabled true 开启跟踪，false 关闭跟踪
+     */
+    @PostMapping("/tracker/set")
+    public Result<Map<String, Object>> setTrackerEnabled(@RequestParam boolean enabled) {
+        try {
+            log.info("设置目标跟踪: enabled={}", enabled);
+            Map<String, Object> result = rknnService.setTrackerEnabled(enabled);
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "设置目标跟踪失败");
+                return Result.error(statusCode, message);
+            }
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("设置目标跟踪失败", e);
+            return Result.error(500, "设置目标跟踪失败: " + e.getMessage());
+        }
+    }
+
+    private boolean isDownstreamError(Map<String, Object> result) {
+        if (result == null) {
+            return true;
+        }
+        Object success = result.get("success");
+        return Boolean.FALSE.equals(success);
+    }
+
+    private String extractErrorMessage(Map<String, Object> result, String fallback) {
+        if (result != null) {
+            Object error = result.get("error");
+            if (error != null && !error.toString().trim().isEmpty()) {
+                return error.toString();
+            }
+            Object message = result.get("message");
+            if (message != null && !message.toString().trim().isEmpty()) {
+                return message.toString();
+            }
+        }
+        return fallback;
+    }
+
+    private int extractStatusCode(Object rawError, int fallback) {
+        if (rawError == null) {
+            return fallback;
+        }
+        String text = rawError.toString();
+        for (int i = 0; i + 2 < text.length(); i++) {
+            char c0 = text.charAt(i);
+            char c1 = text.charAt(i + 1);
+            char c2 = text.charAt(i + 2);
+            if (Character.isDigit(c0) && Character.isDigit(c1) && Character.isDigit(c2)) {
+                int code = Integer.parseInt(text.substring(i, i + 3));
+                if (code >= 100 && code <= 599) {
+                    return code;
+                }
+            }
+        }
+        return fallback;
+    }
+
+    /**
      * 开启摄像头推流（两路 1280x720）
      */
     @PostMapping("/rtsp/camera/start")
@@ -67,6 +139,20 @@ public class RknnController {
         } catch (Exception e) {
             log.error("开启摄像头推流失败", e);
             return Result.error(500, "开启摄像头推流失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 获取视觉模块状态
+     */
+    @GetMapping("/status")
+    public Result<Map<String, Object>> getStatus() {
+        try {
+            Map<String, Object> result = rknnService.getStatus();
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("获取视觉模块状态失败", e);
+            return Result.error(500, "获取视觉模块状态失败: " + e.getMessage());
         }
     }
 

@@ -14,6 +14,7 @@ import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -79,15 +80,29 @@ public class RknnService {
      * 开启推理（可选开启跟踪）
      */
     public Map<String, Object> startInference(boolean enableTracking) {
+        return startInference(enableTracking, null);
+    }
+
+    /**
+     * 开启推理（可选开启跟踪 + 跟踪算法）
+     */
+    public Map<String, Object> startInference(boolean enableTracking, String trackerBackend) {
         try {
+            String normalizedTracker = normalizeTrackerBackend(trackerBackend);
             // 显式传递 track 参数，避免视觉服务默认行为导致“false 仍开启跟踪”。
-            String url = getApiUrl("/api/inference/on?track=" + (enableTracking ? "1" : "0"));
+            StringBuilder urlBuilder = new StringBuilder(getApiUrl("/api/inference/on"))
+                .append("?track=").append(enableTracking ? "1" : "0");
+            if (normalizedTracker != null) {
+                urlBuilder.append("&tracker=").append(normalizedTracker);
+            }
+            String url = urlBuilder.toString();
             ResponseEntity<Map> response = rknnServerRestTemplate.postForEntity(url, null, Map.class);
 
             if (response.getStatusCode().is2xxSuccessful()) {
                 inferenceEnabled.set(true);
                 trackingEnabled.set(enableTracking);
-                log.info("推理已开启, tracking={}", enableTracking);
+                log.info("推理已开启, tracking={}, tracker={}", enableTracking,
+                    normalizedTracker == null ? "(default)" : normalizedTracker);
                 return response.getBody();
             }
             log.error("开启推理失败: {}", response.getStatusCode());
@@ -96,6 +111,20 @@ public class RknnService {
             log.error("开启推理失败: {}", e.getMessage());
             return Map.of("success", false, "error", e.getMessage());
         }
+    }
+
+    private String normalizeTrackerBackend(String trackerBackend) {
+        if (trackerBackend == null) {
+            return null;
+        }
+        String normalized = trackerBackend.trim().toLowerCase(Locale.ROOT);
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        if (!"bytetrack".equals(normalized) && !"deepsort".equals(normalized)) {
+            throw new IllegalArgumentException("tracker 仅支持 bytetrack 或 deepsort");
+        }
+        return normalized;
     }
 
     /**
@@ -116,6 +145,27 @@ public class RknnService {
             return Map.of("success", false, "error", "HTTP " + response.getStatusCode());
         } catch (RestClientException e) {
             log.error("关闭推理失败: {}", e.getMessage());
+            return Map.of("success", false, "error", e.getMessage());
+        }
+    }
+
+    /**
+     * 设置目标跟踪开关（推理开启时即时生效）
+     */
+    public Map<String, Object> setTrackerEnabled(boolean enabled) {
+        try {
+            String url = getApiUrl("/api/tracker/") + (enabled ? "1" : "0");
+            ResponseEntity<Map> response = rknnServerRestTemplate.postForEntity(url, null, Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                trackingEnabled.set(enabled);
+                log.info("目标跟踪已{}", enabled ? "开启" : "关闭");
+                return response.getBody();
+            }
+            log.error("设置目标跟踪失败: {}", response.getStatusCode());
+            return Map.of("success", false, "error", "HTTP " + response.getStatusCode());
+        } catch (RestClientException e) {
+            log.error("设置目标跟踪失败: {}", e.getMessage());
             return Map.of("success", false, "error", e.getMessage());
         }
     }

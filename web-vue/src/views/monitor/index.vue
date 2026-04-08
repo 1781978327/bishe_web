@@ -24,6 +24,22 @@
           @change="handleObjectDetectionToggle"
           style="margin-left: 12px;"
         />
+        <el-switch
+          v-model="trackingEnabled"
+          active-text="目标跟踪"
+          inactive-text="目标跟踪"
+          @change="handleTrackingToggle"
+        />
+        <el-select
+          v-model="trackerBackend"
+          class="tracker-select"
+          size="small"
+          placeholder="跟踪算法"
+          @change="handleTrackerBackendChange"
+        >
+          <el-option label="ByteTrack" value="bytetrack" />
+          <el-option label="DeepSORT" value="deepsort" />
+        </el-select>
       </div>
       <div class="right">
         <el-button-group>
@@ -622,6 +638,13 @@ const selectedUserId = ref<string>('')
 // 目标检测阈值设置
 const thresholdSettingsVisible = ref(false)
 const objectDetectionEnabled = ref(true)
+const isSyncingDetectionStatus = ref(false)
+const trackingEnabled = ref(true)
+const isSyncingTrackingStatus = ref(false)
+type TrackerBackend = 'bytetrack' | 'deepsort'
+const TRACKER_BACKEND_STORAGE_KEY = 'monitorTrackerBackend'
+const TRACKING_ENABLED_STORAGE_KEY = 'monitorTrackingEnabled'
+const trackerBackend = ref<TrackerBackend>('bytetrack')
 
 // 目标检测阈值配置
 const objectDetectionSettings = ref({
@@ -630,23 +653,262 @@ const objectDetectionSettings = ref({
   boxCountThreshold: 0           // 框数量阈值（0表示不限制）
 })
 
-// 目标检测开关切换
-const handleObjectDetectionToggle = async (enabled: boolean) => {
+const parseBooleanLike = (value: unknown): boolean | null => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true' || normalized === '1' || normalized === 'on') return true
+    if (normalized === 'false' || normalized === '0' || normalized === 'off') return false
+  }
+  return null
+}
+
+const parseTrackerBackendLike = (value: unknown): TrackerBackend | null => {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'bytetrack' || normalized === 'deepsort') {
+    return normalized
+  }
+  return null
+}
+
+const trackerBackendLabel = (backend: TrackerBackend): string => {
+  return backend === 'deepsort' ? 'DeepSORT' : 'ByteTrack'
+}
+
+const saveTrackerBackend = (backend: TrackerBackend) => {
+  localStorage.setItem(TRACKER_BACKEND_STORAGE_KEY, backend)
+}
+
+const saveTrackingEnabled = (enabled: boolean) => {
+  localStorage.setItem(TRACKING_ENABLED_STORAGE_KEY, enabled ? '1' : '0')
+}
+
+const loadTrackerBackend = () => {
+  const saved = localStorage.getItem(TRACKER_BACKEND_STORAGE_KEY)
+  const parsed = parseTrackerBackendLike(saved)
+  if (parsed) {
+    trackerBackend.value = parsed
+  }
+}
+
+const loadTrackingEnabled = () => {
+  const saved = localStorage.getItem(TRACKING_ENABLED_STORAGE_KEY)
+  const parsed = parseBooleanLike(saved)
+  if (parsed !== null) {
+    trackingEnabled.value = parsed
+  }
+}
+
+const handleTrackerBackendChange = (value: TrackerBackend) => {
+  saveTrackerBackend(value)
+  if (objectDetectionEnabled.value) {
+    ElMessage.success(`跟踪算法已切换为 ${trackerBackendLabel(value)}（请关闭后重新开启目标检测以生效）`)
+  } else {
+    ElMessage.success(`跟踪算法已切换为 ${trackerBackendLabel(value)}`)
+  }
+}
+
+const setTrackingToggleState = (enabled: boolean) => {
+  isSyncingTrackingStatus.value = true
+  trackingEnabled.value = enabled
+  saveTrackingEnabled(enabled)
+  window.setTimeout(() => {
+    isSyncingTrackingStatus.value = false
+  }, 0)
+}
+
+const setDetectionToggleState = (enabled: boolean) => {
+  isSyncingDetectionStatus.value = true
+  objectDetectionEnabled.value = enabled
   objectDetectionSettings.value.enabled = enabled
+  window.setTimeout(() => {
+    isSyncingDetectionStatus.value = false
+  }, 0)
+}
+
+const extractInferenceEnabled = (payload: any): boolean | null => {
+  const data = payload?.data ?? payload
+  return (
+    parseBooleanLike(data?.inference_enabled) ??
+    parseBooleanLike(data?.inferenceEnabled) ??
+    parseBooleanLike(data?.inference) ??
+    null
+  )
+}
+
+const extractTrackerBackend = (payload: any): TrackerBackend | null => {
+  const data = payload?.data ?? payload
+  return (
+    parseTrackerBackendLike(data?.tracker_backend) ??
+    parseTrackerBackendLike(data?.trackerBackend) ??
+    null
+  )
+}
+
+const extractTrackerEnabled = (payload: any): boolean | null => {
+  const data = payload?.data ?? payload
+  return (
+    parseBooleanLike(data?.tracker_enabled) ??
+    parseBooleanLike(data?.trackerEnabled) ??
+    parseBooleanLike(data?.tracking_enabled) ??
+    parseBooleanLike(data?.trackingEnabled) ??
+    null
+  )
+}
+
+const isRknnOperationSuccess = (payload: any): boolean => {
+  if (!payload || payload.code !== 200) {
+    return false
+  }
+
+  const data = payload.data
+  if (data && typeof data === 'object') {
+    const successLike = parseBooleanLike(data.success)
+    if (successLike === false) {
+      return false
+    }
+
+    if (typeof data.status === 'string') {
+      const status = data.status.trim().toLowerCase()
+      if (status === 'error' || status === 'failed' || status === 'fail') {
+        return false
+      }
+    }
+  }
+
+  return true
+}
+
+const getRknnOperationErrorMessage = (payload: any, fallback: string): string => {
+  if (!payload || typeof payload !== 'object') {
+    return fallback
+  }
+
+  const data = payload.data
+  if (data && typeof data === 'object') {
+    if (typeof data.error === 'string' && data.error.trim()) return data.error
+    if (typeof data.message === 'string' && data.message.trim()) return data.message
+  }
+  if (typeof payload.msg === 'string' && payload.msg.trim()) return payload.msg
+  return fallback
+}
+
+const syncDetectionToggleFromServer = async (silent = true): Promise<boolean> => {
   try {
-    const endpoint = enabled ? '/api/rknn/inference/on' : '/api/rknn/inference/off'
-    const method = enabled ? 'POST' : 'POST'
-    const res = await fetch(endpoint, { method })
+    const res = await fetch('/api/rknn/status')
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+
+    const payload = await res.json()
+    const enabled = extractInferenceEnabled(payload)
+    const backend = extractTrackerBackend(payload)
+    const tracker = extractTrackerEnabled(payload)
+    if (enabled === null) {
+      throw new Error('未在状态响应中找到 inference_enabled 字段')
+    }
+
+    setDetectionToggleState(enabled)
+    if (tracker !== null) {
+      setTrackingToggleState(tracker)
+    }
+    if (backend) {
+      trackerBackend.value = backend
+      saveTrackerBackend(backend)
+    }
+    return true
+  } catch (err) {
+    console.error('同步目标检测状态失败:', err)
+    if (!silent) {
+      ElMessage.warning('未获取到视觉模块实时状态，已保留本地开关状态')
+    }
+    return false
+  }
+}
+
+const handleTrackingToggle = async (enabled: string | number | boolean) => {
+  if (isSyncingTrackingStatus.value) return
+
+  const targetEnabled = parseBooleanLike(enabled)
+  if (targetEnabled === null) {
+    ElMessage.error('目标跟踪开关值无效')
+    return
+  }
+
+  const previousEnabled = !targetEnabled
+  setTrackingToggleState(targetEnabled)
+
+  if (!objectDetectionEnabled.value) {
+    ElMessage.success(targetEnabled ? '目标跟踪已开启（下次开启目标检测时生效）' : '目标跟踪已关闭（下次开启目标检测时生效）')
+    return
+  }
+
+  try {
+    // 兼容老后端：直接复用 inference/on 的 track 参数做跟踪即时切换
+    const endpoint = `/api/rknn/inference/on?track=${targetEnabled ? 'true' : 'false'}&tracker=${encodeURIComponent(trackerBackend.value)}`
+    const res = await fetch(endpoint, { method: 'POST' })
     const data = await res.json()
 
-    if (data.code === 200) {
-      ElMessage.success(enabled ? '目标检测已开启' : '目标检测已关闭')
+    if (isRknnOperationSuccess(data)) {
+      const synced = await syncDetectionToggleFromServer(true)
+      if (!synced) {
+        setTrackingToggleState(targetEnabled)
+      }
+      ElMessage.success(targetEnabled ? '目标跟踪已开启' : '目标跟踪已关闭')
     } else {
-      ElMessage.error(data.msg || '操作失败')
+      setTrackingToggleState(previousEnabled)
+      ElMessage.error(getRknnOperationErrorMessage(data, '目标跟踪切换失败，已回滚'))
     }
   } catch (err) {
+    setTrackingToggleState(previousEnabled)
+    console.error('目标跟踪切换失败:', err)
+    ElMessage.error('目标跟踪切换失败，已回滚')
+  }
+}
+
+// 目标检测开关切换
+const handleObjectDetectionToggle = async (enabled: string | number | boolean) => {
+  if (isSyncingDetectionStatus.value) return
+
+  const targetEnabled = parseBooleanLike(enabled)
+  if (targetEnabled === null) {
+    ElMessage.error('目标检测开关值无效')
+    return
+  }
+
+  const previousEnabled = objectDetectionSettings.value.enabled
+  objectDetectionSettings.value.enabled = targetEnabled
+
+  try {
+    const endpoint = targetEnabled
+      ? `/api/rknn/inference/on?track=${trackingEnabled.value ? 'true' : 'false'}&tracker=${encodeURIComponent(trackerBackend.value)}`
+      : '/api/rknn/inference/off'
+    const res = await fetch(endpoint, { method: 'POST' })
+    const data = await res.json()
+
+    if (isRknnOperationSuccess(data)) {
+      const synced = await syncDetectionToggleFromServer(true)
+      if (!synced) {
+        setDetectionToggleState(targetEnabled)
+      }
+      ElMessage.success(
+        targetEnabled
+          ? `目标检测已开启（跟踪${trackingEnabled.value ? '开启' : '关闭'}，${trackerBackendLabel(trackerBackend.value)}）`
+          : '目标检测已关闭'
+      )
+      localStorage.setItem('objectDetectionSettings', JSON.stringify(objectDetectionSettings.value))
+      saveTrackerBackend(trackerBackend.value)
+      saveTrackingEnabled(trackingEnabled.value)
+    } else {
+      setDetectionToggleState(previousEnabled)
+      ElMessage.error(getRknnOperationErrorMessage(data, '操作失败，已回滚开关状态'))
+    }
+  } catch (err) {
+    setDetectionToggleState(previousEnabled)
     console.error('目标检测开关失败:', err)
-    ElMessage.error('目标检测开关失败')
+    ElMessage.error('目标检测开关失败，已回滚开关状态')
   }
 }
 
@@ -1241,6 +1503,9 @@ const showScrollbar = computed(() => {
   return displayCameras.value.length > 0
 })
 
+const streamProtocol = (((import.meta.env.VITE_STREAM_PROTOCOL as string | undefined) || 'hls')).toLowerCase()
+const isWebRtcStream = streamProtocol === 'webrtc'
+
 const sleep = (ms: number) => new Promise<void>((resolve) => {
   window.setTimeout(resolve, ms)
 })
@@ -1250,11 +1515,18 @@ onMounted(async () => {
   // 初始化默认接收人
   initDefaultRecipients()
 
+  // 加载跟踪算法选择
+  loadTrackerBackend()
+  loadTrackingEnabled()
+
   // 加载目标检测阈值设置
   loadThresholdSettings()
 
   // 检查并建立WebSocket连接
   await checkWebSocketConnection()
+
+  // 从视觉模块同步目标检测实时状态，避免仅依赖本地缓存导致开关显示不准
+  await syncDetectionToggleFromServer(true)
 
   // 获取摄像头列表
   await fetchCameras()
@@ -1267,7 +1539,7 @@ onMounted(async () => {
 
   // 自动开启推流
   const streamStarted = await startRtspStream()
-  if (streamStarted) {
+  if (streamStarted && !isWebRtcStream) {
     // 给 HLS 切片生成一个短暂预热时间，避免首次进入时播放器拿到空清单
     await sleep(1200)
   }
@@ -2278,6 +2550,10 @@ const formatLastSentTime = (timestamp: number | null): string => {
     display: flex;
     align-items: center;
     gap: 12px;
+
+    .tracker-select {
+      width: 140px;
+    }
   }
 }
 

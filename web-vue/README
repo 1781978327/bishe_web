@@ -5,6 +5,9 @@
 - 前端 `web-vue`: `3000`
 - Spring Boot 后端: `8080`
 - RKNN 视觉服务: `8091`
+- MediaMTX RTSP: `8554`
+- MediaMTX HLS: `8888`
+- MediaMTX WebRTC(WHEP): `8889`
 
 ## 1. 启动前端
 
@@ -77,3 +80,23 @@ curl -X POST "http://127.0.0.1:8091/api/inference/off"
 
 - 前端提交禁入区后，视觉服务会周期同步（默认约 2 秒一次）。
 - 通常 1-2 秒后画面中的四边形会更新。
+
+## 8. 切换到 WebRTC 低延迟播放
+
+前端默认走 HLS。要测试 WebRTC 延迟，在 `web-vue` 目录新增 `.env.development`：
+
+```bash
+VITE_STREAM_PROTOCOL=webrtc
+VITE_WEBRTC_BASE_URL=http://192.168.137.224:8889
+```
+
+然后重启前端：
+
+```bash
+npm run dev -- --host 0.0.0.0 --port 3000
+```
+
+说明：
+
+- `VITE_STREAM_PROTOCOL=webrtc` 时，监控页会使用 `http://<host>:8889/<path>/whep` 建连。
+- 不设置该变量或设为 `hls` 时，保持原 HLS 播放。
