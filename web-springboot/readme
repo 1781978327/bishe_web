@@ -1,0 +1,12 @@
+启动教程：
+
+1. 使用项目内置的 gradlew（推荐）：
+cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
+./gradlew bootRun
+
+2. 使用预安装的 gradle：
+cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
+/home/orangepi/Desktop/web/bishebeifen-master/web-springboot/gradle-8.14.1/bin/gradle bootRun
+
+3. 带配置启动：
+./gradlew bootRun -Dspring.profiles.active=dev

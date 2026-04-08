@@ -1,0 +1,408 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-04-04T00:00:00.000Z" agent="Claude" version="22.1.0" type="device">
+  <diagram id="full-system-arch" name="嵌入式智能监控系统总体架构">
+    <mxGraphModel dx="2400" dy="2000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="4400" pageHeight="3200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- ===================== 标题 ===================== -->
+        <mxCell id="title" value="嵌入式多目标追踪与智能预警系统 - 总体架构图" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="20" width="1600" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="Embedded Multi-Object Tracking and Intelligent Alert System - System Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=11;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="65" width="1600" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 层标签 ===================== -->
+        <mxCell id="L1" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E8F4FD;strokeColor=#4A90D9;fontSize=14;fontStyle=1;fontColor=#4A90D9;align=center;verticalAlign=middle;opacity=30;" vertex="1" parent="1">
+          <mxGeometry x="180" y="100" width="80" height="300" as="geometry"/>
+        </mxCell>
+        <mxCell id="L1T" value="用户&#xa;交互层" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;fontColor=#4A90D9;rotation=-90;" vertex="1" parent="1">
+          <mxGeometry x="185" y="220" width="60" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="L2" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F7E6;strokeColor=#52C41A;fontSize=14;fontStyle=1;fontColor=#52C41A;align=center;verticalAlign=middle;opacity=30;" vertex="1" parent="1">
+          <mxGeometry x="180" y="410" width="80" height="300" as="geometry"/>
+        </mxCell>
+        <mxCell id="L2T" value="Web应用层" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;fontColor=#52C41A;rotation=-90;" vertex="1" parent="1">
+          <mxGeometry x="185" y="530" width="60" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="L3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF7E6;strokeColor=#FA8C16;fontSize=14;fontStyle=1;fontColor=#FA8C16;align=center;verticalAlign=middle;opacity=30;" vertex="1" parent="1">
+          <mxGeometry x="180" y="720" width="80" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="L3T" value="业务服务层" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;fontColor=#FA8C16;rotation=-90;" vertex="1" parent="1">
+          <mxGeometry x="185" y="820" width="60" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="L4" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F0E6FF;strokeColor=#722ED1;fontSize=14;fontStyle=1;fontColor=#722ED1;align=center;verticalAlign=middle;opacity=30;" vertex="1" parent="1">
+          <mxGeometry x="180" y="990" width="80" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="L4T" value="边缘计算层" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;fontColor=#722ED1;rotation=-90;" vertex="1" parent="1">
+          <mxGeometry x="185" y="1060" width="60" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="L5" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF0F0;strokeColor=#F5222D;fontSize=14;fontStyle=1;fontColor=#F5222D;align=center;verticalAlign=middle;opacity:30" vertex="1" parent="1">
+          <mxGeometry x="180" y="1200" width="80" height="380" as="geometry"/>
+        </mxCell>
+        <mxCell id="L5T" value="感知执行层" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=13;fontStyle=1;fontColor=#F5222D;rotation=-90;" vertex="1" parent="1">
+          <mxGeometry x="185" y="1360" width="60" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 第1层: 用户交互层 ===================== -->
+        <mxCell id="n01" value="用户终端&#xa;(PC / 移动设备)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAEEF3;strokeColor=#4A90D9;strokeWidth=2;fontSize=13;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=10;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="280" y="120" width="160" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="n02" value="Web 浏览器&#xa;(Chrome / Firefox)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAEEF3;strokeColor=#4A90D9;strokeWidth=2;fontSize=13;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=10;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="480" y="120" width="160" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 第2层: Web应用层 ===================== -->
+        <mxCell id="n10" value="Vue 3 前端应用&#xa;TypeScript + Vite&#xa;Composition API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9F7BE;strokeColor=#52C41A;strokeWidth=2;fontSize=12;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="280" y="440" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n11" value="Element Plus&#xa;UI 组件库" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9F7BE;strokeColor=#52C41A;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="500" y="440" width="130" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="n12" value="ECharts&#xa;数据可视化" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9F7BE;strokeColor=#52C41A;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="670" y="440" width="110" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="n13" value="flv.js / hls.js&#xa;视频流解码&#xa;Canvas 检测框叠加" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9F7BE;strokeColor=#52C41A;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="820" y="440" width="150" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="n14" value="Pinia&#xa;状态管理" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9F7BE;strokeColor=#52C41A;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="440" width="100" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="n15" value="Vue Router&#xa;路由 + 守卫" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9F7BE;strokeColor=#52C41A;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="440" width="120" height="65" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 第3层: 业务服务层 ===================== -->
+        <mxCell id="n20" value="Spring Boot 3.2 后端服务&#xa;HTTP 端口: 8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3CC;strokeColor=#FA8C16;strokeWidth=2;fontSize=12;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="280" y="740" width="190" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="n21" value="Controller 层&#xa;请求路由 &amp; 参数校验&#xa;Result 响应封装" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE7BA;strokeColor=#FA8C16;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="510" y="730" width="160" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="n22" value="Service 层&#xa;业务逻辑编排&#xa;RestTemplate HTTP 调用&#xa;@Scheduled 定时任务" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE7BA;strokeColor=#FA8C16;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="710" y="730" width="160" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="n23" value="Repository 层&#xa;JPA 数据访问&#xa;JpaSpecificationExecutor&#xa;动态条件查询" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE7BA;strokeColor=#FA8C16;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="910" y="730" width="160" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="n24" value="JWT + Spring Security&#xa;无状态认证&#xa;Token 生成/验证" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE7BA;strokeColor=#FA8C16;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="730" width="140" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="n25" value="MySQL / H2 数据库&#xa;JPA / Hibernate ORM" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#FFF3CC;strokeColor=#FA8C16;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="730" width="120" height="90" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 第4层: 边缘计算层 ===================== -->
+        <mxCell id="n30" value="RK3588 边缘设备&#xa;OrangePi 5 Plus&#xa;NPU 6TOPS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8D9F5;strokeColor=#722ED1;strokeWidth=2;fontSize=12;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="280" y="1010" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n31" value="YOLOv8s + DeepSort&#xa;RKNN NPU 多线程推理&#xa;C++ + CMake&#xa;帧处理流水线" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6E4FF;strokeColor=#1890FF;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=6;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="500" y="1005" width="180" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="n32" value="MediaMTX RTSP 服务器&#xa;RTSP 推流&#xa;端口: 8554&#xa;H.264 硬件编码" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6E4FF;strokeColor=#1890FF;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=6;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="720" y="1005" width="170" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="n33" value="DeepSort 多目标跟踪&#xa;OSNet Re-ID 特征提取&#xa;ByteTrack (备选)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6E4FF;strokeColor=#1890FF;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=6;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="930" y="1005" width="170" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="n34" value="OpenCV + FFmpeg&#xa;视频解码 (RTSP/USB)&#xa;RGA 硬件加速预处理" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6E4FF;strokeColor=#1890FF;strokeWidth=2;fontSize=11;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=6;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="1005" width="180" height="85" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 第5层: 感知执行层 ===================== -->
+        <!-- 子系统A: 声音监测 (左侧) -->
+        <mxCell id="n40" value="OrangePi 5&#xa;声音监测子系统" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6F7F7;strokeColor=#13C2C2;strokeWidth=2;fontSize=12;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="280" y="1220" width="160" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="n41" value="HTTP 服务 (libmicrohttpd)&#xa;端口: 8089&#xa;/analyze /realtime/* /health" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6F7F7;strokeColor=#13C2C2;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=6;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="480" y="1220" width="180" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="n42" value="ALSA 音频采集&#xa;USB 麦克风&#xa;16kHz / 16bit / Mono&#xa;plughw:4,0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C6F5E0;strokeColor=#52C41A;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="280" y="1340" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n43" value="YAMNet RKNN 推理&#xa;声音事件分类&#xa;滑动窗口&#xa;3s窗长 / 1.5s步长" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C6F5E0;strokeColor=#52C41A;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="480" y="1340" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n44" value="异常检测引擎&#xa;关键词匹配&#xa;Scream / Cry / Yell&#xa;Baby / Howl / Moan&#xa;阈值: 0.05~0.1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C6F5E0;strokeColor=#52C41A;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="700" y="1340" width="170" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n45" value="事件合并机制&#xa;MERGE_GAP = 2.0s&#xa;连续异常片段合并&#xa;保存异常音频" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C6F5E0;strokeColor=#52C41A;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="910" y="1340" width="160" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- 子系统B: 环境监测 (右侧) -->
+        <mxCell id="n50" value="OrangePi 5&#xa;环境监测子系统" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE7CC;strokeColor=#FA541C;strokeWidth=2;fontSize=12;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=8;arcSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="1220" width="160" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="n51" value="HTTP 服务 (libmicrohttpd)&#xa;端口: 8088&#xa;/sensor /health" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE7CC;strokeColor=#FA541C;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=6;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1340" y="1220" width="170" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="n52" value="DHT11 传感器&#xa;温湿度采集&#xa;GPIO 单总线 (wPi:2)&#xa;40bit 数据 / 校验" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFD6D6;strokeColor=#F5222D;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="1340" width="170" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n53" value="ADS1115 ADC&#xa;I2C (/dev/i2c-1)&#xa;地址 0x48&#xa;±4.096V 量程" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFD6D6;strokeColor=#F5222D;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="1340" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n54" value="MQ-2 烟雾传感器&#xa;ppm 浓度计算&#xa;分压电路 (10kΩ)&#xa;ADC AIN0 通道" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFD6D6;strokeColor=#F5222D;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1550" y="1340" width="170" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="n55" value="GL5528 光照传感器&#xa;lux 光照强度&#xa;线性映射 0~1000lux&#xa;ADC AIN1 通道" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFD6D6;strokeColor=#F5222D;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1760" y="1340" width="170" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- 阈值管理 -->
+        <mxCell id="n56" value="阈值管理&#xa;温度 &lt; 35°C&#xa;湿度 &lt; 80%&#xa;烟雾 &lt; 100ppm&#xa;光照 &lt; 500lux" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE7CC;strokeColor=#FA541C;strokeWidth=2;fontSize=10;fontColor=#1A1A2E;align=center;verticalAlign=middle;spacing=5;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1970" y="1340" width="160" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 分组框 (Swimlane) ===================== -->
+        <mxCell id="grp1" value="Spring Boot 子系统 (8080)" style="swimlane;html=1;whiteSpace=wrap;fillColor=#FFFAF0;strokeColor=#FA8C16;fontSize=13;fontColor=#FA8C16;align=center;verticalAlign=middle;spacing=10;startSize=22;horizontal=1;" vertex="1" parent="1">
+          <mxGeometry x="260" y="710" width="1200" height="230" as="geometry"/>
+        </mxCell>
+        <mxCell id="grp2" value="RK3588 视频监控子系统" style="swimlane;html=1;whiteSpace=wrap;fillColor=#F8F0FF;strokeColor=#722ED1;fontSize=13;fontColor=#722ED1;align=center;verticalAlign=middle;spacing=10;startSize=22;horizontal=1;" vertex="1" parent="1">
+          <mxGeometry x="260" y="990" width="1080" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="grp3" value="声音监测子系统 (OrangePi 5 · HTTP:8089)" style="swimlane;html=1;whiteSpace=wrap;fillColor=#F0FFFA;strokeColor=#13C2C2;fontSize=13;fontColor=#13C2C2;align=center;verticalAlign=middle;spacing=10;startSize=22;horizontal=1;" vertex="1" parent="1">
+          <mxGeometry x="260" y="1190" width="830" height="270" as="geometry"/>
+        </mxCell>
+        <mxCell id="grp4" value="环境监测子系统 (OrangePi 5 · HTTP:8088)" style="swimlane;html=1;whiteSpace=wrap;fillColor=#FFF8F0;strokeColor=#FA541C;fontSize=13;fontColor=#FA541C;align=center;verticalAlign=middle;spacing=10;startSize=22;horizontal=1;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="1190" width="1030" height="270" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 连线 (Arrow) ===================== -->
+
+        <!-- 用户层内 -->
+        <mxCell id="e01" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#4A90D9;strokeWidth=2;endArrow=classic;endFill=1;dashed=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n01" target="n02">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 用户层 -> Web层 -->
+        <mxCell id="e02" value="HTTPS / HTTP" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=2;endArrow=classic;endFill=1;dashed=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n02" target="n10">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Web层内链 -->
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n10" target="n11">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n11" target="n12">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n12" target="n13">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n13" target="n14">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n14" target="n15">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Web层 -> Spring Boot -->
+        <mxCell id="e20" value="RESTful API&#xa;JSON (Axios)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FA8C16;strokeWidth=2;endArrow=classic;endFill=1;dashed=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n15" target="n20">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Spring Boot 层内 -->
+        <mxCell id="e21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FA8C16;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n20" target="n21">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e22" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FA8C16;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n21" target="n22">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e23" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FA8C16;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n22" target="n23">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e24" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FA8C16;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n23" target="n24">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FA8C16;strokeWidth=2;endArrow=classic;endFill=1;dashed=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n20" target="n25">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Spring Boot -> 外部服务 -->
+        <mxCell id="e30" value="HTTP /api/rknn/*&#xa;(/rknn/inference, /rknn/status...)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1890FF;strokeWidth=2;endArrow=classic;endFill=1;dashed=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n20" target="n30">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e31" value="HTTP /api/sound/*&#xa;(/sound/start, /sound/realtime/*...)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#13C2C2;strokeWidth=2;endArrow=classic;endFill=1;dashed=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n20" target="n40">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e32" value="HTTP /api/sensor/*&#xa;(/sensor/latest, /sensor/threshold...)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FA541C;strokeWidth=2;endArrow=classic;endFill=1;dashed=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n20" target="n50">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- RK3588 内部 -->
+        <mxCell id="e40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1890FF;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n30" target="n31">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e41" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1890FF;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n31" target="n32">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e42" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1890FF;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n32" target="n33">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e43" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1890FF;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n33" target="n34">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- RK3588 -> 前端 (RTSP 流) -->
+        <mxCell id="e44" value="RTSP H.264 流&#xa;(MediaMTX :8554)&#xa;→ flv.js / hls.js 解码" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1890FF;strokeWidth=2;endArrow=classic;endFill=1;dashed=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n33" target="n10">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 声音子系统内部 -->
+        <mxCell id="e50" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#13C2C2;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n40" target="n41">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e51" value="USB 音频&#xa;ALSA" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n41" target="n42">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e52" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n42" target="n43">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e53" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n43" target="n44">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e54" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#52C41A;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n44" target="n45">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- 环境子系统内部 -->
+        <mxCell id="e60" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#FA541C;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n50" target="n51">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e61" value="GPIO&#xa;单总线" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F5222D;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n51" target="n52">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e62" value="I2C&#xa;/dev/i2c-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F5222D;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n52" target="n53">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e63" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F5222D;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n53" target="n54">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e64" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F5222D;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n54" target="n55">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e65" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F5222D;strokeWidth=1;endArrow=classic;endFill=1;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n55" target="n56">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 数据流标注 ===================== -->
+        <mxCell id="dt1" value="HTTPS / HTTP&#xa;RESTful" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontColor=#52C41A;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="560" y="385" width="80" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="dt2" value="JSON&#xa;Axios" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontColor=#FA8C16;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="560" y="650" width="60" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="dt3" value="RTSP H.264&#xa;实时视频流" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontColor=#1890FF;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="240" y="680" width="80" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="dt4" value="JSON / HTTP" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontColor=#13C2C2;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1120" width="80" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="dt5" value="JSON / HTTP" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontColor=#FA541C;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="240" y="1140" width="80" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- ===================== 图例 ===================== -->
+        <mxCell id="legend_bg" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F9F9F9;strokeColor=#DDDDDD;strokeWidth=1;fontSize=11;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="260" y="1460" width="1950" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_title" value="图例 Legend" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;fontStyle=1;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="275" y="1468" width="100" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- 图例项 -->
+        <mxCell id="lg1" value="" style="ellipse;html=1;shape=ellipse;whiteSpace=wrap;fillColor=#DAEEF3;strokeColor=#4A90D9;strokeWidth=2;aspect=fixed;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="280" y="1510" width="20" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg1t" value="用户交互层" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="306" y="1507" width="80" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg2" value="" style="ellipse;html=1;shape=ellipse;whiteSpace=wrap;fillColor=#D9F7BE;strokeColor=#52C41A;strokeWidth=2;aspect=fixed;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="410" y="1510" width="20" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg2t" value="Web 前端" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="436" y="1507" width="70" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg3" value="" style="ellipse;html=1;shape=ellipse;whiteSpace=wrap;fillColor=#FFF3CC;strokeColor=#FA8C16;strokeWidth=2;aspect=fixed;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="530" y="1510" width="20" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg3t" value="Spring Boot 后端" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="556" y="1507" width="100" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg4" value="" style="ellipse;html=1;shape=ellipse;whiteSpace=wrap;fillColor=#D6E4FF;strokeColor=#1890FF;strokeWidth=2;aspect=fixed;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="680" y="1510" width="20" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg4t" value="RK3588 视频子系统" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="706" y="1507" width="120" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg5" value="" style="ellipse;html=1;shape=ellipse;whiteSpace=wrap;fillColor=#D6F7F7;strokeColor=#13C2C2;strokeWidth=2;aspect=fixed;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="850" y="1510" width="20" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg5t" value="声音监测子系统" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="876" y="1507" width="100" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg6" value="" style="ellipse;html=1;shape=ellipse;whiteSpace=wrap;fillColor=#FFE7CC;strokeColor=#FA541C;strokeWidth=2;aspect=fixed;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="1510" width="20" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg6t" value="环境监测子系统" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="1026" y="1507" width="100" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg7" value="" style="ellipse;html=1;shape=ellipse;whiteSpace=wrap;fillColor=#FFD6D6;strokeColor=#F5222D;strokeWidth=2;aspect=fixed;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="1510" width="20" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg7t" value="硬件传感器" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="1176" y="1507" width="80" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg8" value="" style="ellipse;html=1;shape=ellipse;whiteSpace=wrap;fillColor=#C6F5E0;strokeColor=#52C41A;strokeWidth=2;aspect=fixed;verticalAlign=middle;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="1510" width="20" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg8t" value="算法 / 音频处理" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="1306" y="1507" width="100" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- 图例第二行 -->
+        <mxCell id="lg_line1" value="━━━━━" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=14;fontColor=#1890FF;" vertex="1" parent="1">
+          <mxGeometry x="280" y="1542" width="50" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg_line1t" value="HTTP RESTful API 调用" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="336" y="1538" width="140" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg_line2" value="- - - - - - -" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=14;fontColor=#52C41A;" vertex="1" parent="1">
+          <mxGeometry x="500" y="1542" width="70" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg_line2t" value="模块内部调用" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="576" y="1538" width="100" height="25" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="lg_rtsp" value="≈≈≈≈≈≈≈" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=14;fontColor=#1890FF;" vertex="1" parent="1">
+          <mxGeometry x="700" y="1542" width="50" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg_rtsp_t" value="RTSP 实时流推送" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=11;fontColor=#1A1A2E;" vertex="1" parent="1">
+          <mxGeometry x="756" y="1538" width="120" height="25" as="geometry"/>
+        </mxCell>
+
+        <!-- 版本信息 -->
+        <mxCell id="ver" value="系统版本: v1.0  |  绘制日期: 2026-04-04  |  基于实际项目代码分析生成" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=10;fontColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="260" y="1585" width="1950" height="25" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

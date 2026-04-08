@@ -1,0 +1,97 @@
+# Gradle
+gradle-8.14.1/
+gradle-8.14.1-all.zip
+gradle-8.14.1-bin.zip
+gradle-8.14.1-wrapper.jar
+gradle/wrapper/gradle-wrapper.jar
+
+# Node modules
+*/node_modules/
+web-vue/node_modules/
+
+# Build outputs
+*/build/
+*/build_linux*/
+*/target/
+*.class
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Uploads
+*/uploads/
+*/upload/
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+
+# Binary files - Models
+*.rknn
+*.pt
+*.onnx
+*.h5
+*.pb
+*.pbtxt
+
+# Binary files - Libraries
+*.so
+*.so.*
+*.a
+*.dylib
+
+# Binary files - Executables
+*.exe
+*.dll
+*.app
+*.ipa
+
+# Binary files - Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.xz
+*.rar
+
+# OpenCV
+opencv/
+3rdparty/
+
+# Media files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.wav
+
+# Images
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.svg
+*.ico
+
+# TypeScript build cache
+*.tsbuildinfo

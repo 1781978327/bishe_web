@@ -1,0 +1,79 @@
+# 前后端+视觉服务联调说明
+
+## 端口约定
+
+- 前端 `web-vue`: `3000`
+- Spring Boot 后端: `8080`
+- RKNN 视觉服务: `8091`
+
+## 1. 启动前端
+
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master/web-vue
+npm run dev -- --host 0.0.0.0 --port 3000
+```
+
+前端访问:
+
+- 本机: `http://127.0.0.1:3000`
+- 局域网: `http://<你的IP>:3000`
+
+## 2. 启动后端（Spring Boot）
+
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
+./gradlew bootRun
+```
+
+后端基地址:
+
+- `http://127.0.0.1:8080/api`
+
+## 3. 启动视觉服务（RKNN）
+
+```bash
+cd /home/orangepi/Desktop/web/yolov8-rk3588-cpp-3-15/build_release
+sudo ./rknn_http_ctrl --port 8091
+```
+
+视觉服务地址:
+
+- `http://127.0.0.1:8091`
+
+## 4. 快速联通自检
+
+```bash
+# 视觉服务状态
+curl http://127.0.0.1:8091/api/status
+
+# 后端禁入区查询（cameraId=1/2）
+curl "http://127.0.0.1:8080/api/rknn/forbidden-area?cameraId=1"
+curl "http://127.0.0.1:8080/api/rknn/forbidden-area?cameraId=2"
+```
+
+## 5. 摄像头取帧映射（已修复串帧）
+
+- `cameraId=1` 对应视觉 `cam=0`
+- `cameraId=2` 对应视觉 `cam=1`
+
+视觉服务支持按路取帧:
+
+- `/api/frame?cam=0&track=0`
+- `/api/frame?cam=1&track=0`
+
+后端 `/api/rknn/frame/current` 已改为直接按 `cam` 获取，不再通过“先切摄像头再抓帧”方式。
+
+## 6. 推理开关
+
+```bash
+# 开推理（不启用跟踪）
+curl -X POST "http://127.0.0.1:8091/api/inference/on?track=0"
+
+# 关推理
+curl -X POST "http://127.0.0.1:8091/api/inference/off"
+```
+
+## 7. 禁入区更新提示
+
+- 前端提交禁入区后，视觉服务会周期同步（默认约 2 秒一次）。
+- 通常 1-2 秒后画面中的四边形会更新。

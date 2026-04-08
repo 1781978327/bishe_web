@@ -1,0 +1,9 @@
+# 类别名称配置文件
+# classes 列表顺序必须与模型训练时的 class_id 一一对应
+# 第一个类 = class_id 0, 第二个类 = class_id 1, 以此类推
+
+classes:
+  - person
+  - fall
+  - fighting
+  - knife

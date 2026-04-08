@@ -1,0 +1,53 @@
+plugins {
+id 'java'
+id 'org.springframework.boot' version '3.2.0'
+id 'io.spring.dependency-management' version '1.1.4'
+}
+
+java {
+sourceCompatibility = '17'
+}
+
+// 国内阿里云镜像
+repositories {
+    maven { url 'https://maven.aliyun.com/repository/public/' }
+    mavenCentral()
+}
+
+dependencies {
+    // Web
+implementation 'org.springframework.boot:spring-boot-starter-web'
+
+// JPA 数据库
+implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+// 安全框架 Spring Security
+implementation 'org.springframework.boot:spring-boot-starter-security'
+
+// Lombok 必须
+compileOnly 'org.projectlombok:lombok'
+annotationProcessor 'org.projectlombok:lombok'
+
+// 工具
+implementation 'com.github.xiaoymin:knife4j-openapi3-jakarta-spring-boot-starter:4.4.0'
+implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+
+// Apache HttpClient (用于音频服务HTTP请求)
+implementation 'org.apache.httpcomponents.client5:httpclient5:5.3'
+
+// MySQL 驱动
+runtimeOnly 'com.mysql:mysql-connector-j'
+
+// 内存数据库 H2
+runtimeOnly 'com.h2database:h2'
+
+// 测试
+testImplementation 'org.springframework.boot:spring-boot-starter-test'
+testImplementation 'org.springframework.security:spring-security-test'
+}
+
+tasks.named('test') {
+useJUnitPlatform()
+}

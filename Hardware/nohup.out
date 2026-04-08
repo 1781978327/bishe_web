@@ -1,0 +1,10 @@
+wiringPiSetup: Unable to open /dev/mem or /dev/gpiomem: No such file or directory.
+  Aborting your program because if it can not access the GPIO
+  hardware then it most certianly won't work
+  Try running with sudo?
+===== 传感器 HTTP 服务器启动中 =====
+端口: 8088
+接口:
+  GET /health  -> 健康检查
+  GET /sensor -> 获取传感器数据
+初始化传感器...

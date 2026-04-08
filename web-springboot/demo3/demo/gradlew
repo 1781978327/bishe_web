@@ -1,0 +1,2 @@
+#!/bin/bash
+exec /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/gradle-8.14.1/bin/gradle "$@"
