@@ -22,10 +22,6 @@
             <el-icon><Monitor /></el-icon>
             <template #title>安全首页</template>
           </el-menu-item>
-          <el-menu-item index="/camera">
-            <el-icon><VideoCamera /></el-icon>
-            <template #title>监控设备</template>
-          </el-menu-item>
           <el-menu-item index="/model/upload">
             <el-icon><Upload /></el-icon>
             <template #title>上传模型</template>
@@ -53,10 +49,6 @@
           <el-menu-item index="/admin/users">
             <el-icon><User /></el-icon>
             <template #title>用户管理</template>
-          </el-menu-item>
-          <el-menu-item index="/camera">
-            <el-icon><VideoCamera /></el-icon>
-            <template #title>监控设备</template>
           </el-menu-item>
           <el-menu-item index="/model/upload">
             <el-icon><Upload /></el-icon>
@@ -119,7 +111,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-import { Monitor, User, Fold, Expand, View, Warning, Setting, VideoCamera, Document, Upload } from '@element-plus/icons-vue'
+import { Monitor, User, Fold, Expand, View, Warning, Setting, Document, Upload } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()

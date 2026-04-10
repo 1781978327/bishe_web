@@ -95,3 +95,17 @@ opencv/
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Allow publishing the RK3588 runtime assets that stay under GitHub's 100MB file limit.
+!yolov8-rk3588-cpp-3-15/model/
+!yolov8-rk3588-cpp-3-15/model/**
+!yolov8-rk3588-cpp-3-15/include/librknn_api.so
+!yolov8-rk3588-cpp-3-15/include/librknnrt.so
+!yolov8-rk3588-cpp-3-15/include/3rdparty/
+!yolov8-rk3588-cpp-3-15/include/3rdparty/**
+!yolov8-rk3588-cpp-3-15/src/mediamtx
+!yolov8-rk3588-cpp-3-15/video/
+!yolov8-rk3588-cpp-3-15/video/**
+
+# GitHub rejects files larger than 100MB, so keep this demo video out of the release branch.
+yolov8-rk3588-cpp-3-15/video/person.mp4

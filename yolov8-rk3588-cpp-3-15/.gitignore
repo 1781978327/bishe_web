@@ -30,7 +30,6 @@
 *.out
 *.app
 
-*.mp4
 /build
 /build_release
 /build_new
@@ -45,4 +44,7 @@
 /test_ffmpeg
 /test_ffmpeg_bin
 /test_video_read
-/src/mediamtx
+
+# Keep the runtime binary in the publish branch and ignore only the oversized demo video.
+!/src/mediamtx
+/video/person.mp4

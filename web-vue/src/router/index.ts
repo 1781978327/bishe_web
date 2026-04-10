@@ -46,12 +46,7 @@ const routes: RouteRecordRaw[] = [
       },
       {
         path: 'camera',
-        name: 'Camera',
-        component: () => import('@/views/camera/index.vue'),
-        meta: {
-          title: '摄像头管理',
-          requiresAuth: true
-        }
+        redirect: '/dashboard'
       },
       {
         path: 'model/upload',

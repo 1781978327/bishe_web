@@ -19,7 +19,7 @@
     <div class="quick-actions">
       <h3>快速操作</h3>
       <el-row :gutter="30">
-        <el-col :span="6">
+        <el-col :span="8">
           <el-card shadow="hover" class="action-card" @click="navigateTo('/monitor')">
             <div class="action-content">
               <el-icon :size="32" color="#059669"><Monitor /></el-icon>
@@ -28,16 +28,7 @@
             </div>
           </el-card>
         </el-col>
-        <el-col :span="6">
-          <el-card shadow="hover" class="action-card" @click="navigateTo('/camera')">
-            <div class="action-content">
-              <el-icon :size="32" color="#1e40af"><VideoCamera /></el-icon>
-              <h4>监控设备</h4>
-              <p>管理监控摄像头</p>
-            </div>
-          </el-card>
-        </el-col>
-        <el-col :span="6">
+        <el-col :span="8">
           <el-card shadow="hover" class="action-card" @click="navigateTo('/detection/record')">
             <div class="action-content">
               <el-icon :size="32" color="#dc2626"><Warning /></el-icon>
@@ -46,7 +37,7 @@
             </div>
           </el-card>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="8">
           <el-card shadow="hover" class="action-card" @click="navigateTo('/profile')">
             <div class="action-content">
               <el-icon :size="32" color="#ea580c"><User /></el-icon>
@@ -424,7 +415,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import axios from 'axios'
 import {
-  Monitor, VideoCamera, Warning, User,
+  Monitor, Warning, User,
   HotWater, MostlyCloudy, WarningFilled, Sunny,
   VideoPlay, VideoPause, Microphone,
   Setting, Cpu, CircleCheck, CircleClose,
