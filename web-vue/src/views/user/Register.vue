@@ -166,9 +166,10 @@ const handleRegister = async () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  background: url('@/assets/images/login-bg.jpg') no-repeat center center;
-  background-size: cover;
-  background-attachment: fixed;
+  background:
+    radial-gradient(circle at 18% 20%, rgba(245, 178, 67, 0.24), transparent 28%),
+    radial-gradient(circle at 82% 16%, rgba(68, 190, 182, 0.16), transparent 24%),
+    linear-gradient(135deg, #08111f 0%, #0e2038 45%, #123058 100%);
   position: relative;
   padding: 20px 0;
 }

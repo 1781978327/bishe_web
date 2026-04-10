@@ -3,6 +3,7 @@ package com.example.demo.controller;
 import com.example.demo.dto.ForbiddenAreaSaveRequest;
 import com.example.demo.dto.Result;
 import com.example.demo.service.RknnService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.CacheControl;
@@ -12,6 +13,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
+import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Slf4j
@@ -146,14 +149,64 @@ public class RknnController {
      * 获取视觉模块状态
      */
     @GetMapping("/status")
-    public Result<Map<String, Object>> getStatus() {
+    public Result<Map<String, Object>> getStatus(HttpServletRequest request) {
         try {
             Map<String, Object> result = rknnService.getStatus();
-            return Result.success(result);
+            return Result.success(normalizeStreamUrls(result, request == null ? null : request.getServerName()));
         } catch (Exception e) {
             log.error("获取视觉模块状态失败", e);
             return Result.error(500, "获取视觉模块状态失败: " + e.getMessage());
         }
+    }
+
+    private Map<String, Object> normalizeStreamUrls(Map<String, Object> status, String requestHost) {
+        if (status == null || requestHost == null || requestHost.isBlank()) {
+            return status;
+        }
+
+        Map<String, Object> normalized = new LinkedHashMap<>(status);
+        rewriteUrlHost(normalized, "rtsp_url_cam0", requestHost, 8554);
+        rewriteUrlHost(normalized, "rtsp_url_cam1", requestHost, 8554);
+        rewriteUrlHost(normalized, "rtsp_url_video", requestHost, 8554);
+        return normalized;
+    }
+
+    private void rewriteUrlHost(Map<String, Object> target, String key, String requestHost, int defaultPort) {
+        Object raw = target.get(key);
+        if (raw == null) {
+            return;
+        }
+
+        try {
+            URI uri = URI.create(raw.toString());
+            String originalHost = uri.getHost();
+            if (!shouldRewriteHost(originalHost)) {
+                return;
+            }
+
+            int port = uri.getPort() > 0 ? uri.getPort() : defaultPort;
+            URI rewritten = new URI(
+                uri.getScheme(),
+                uri.getUserInfo(),
+                requestHost,
+                port,
+                uri.getPath(),
+                uri.getQuery(),
+                uri.getFragment()
+            );
+            target.put(key, rewritten.toString());
+        } catch (Exception ignored) {
+            // 保持原值，避免状态接口因地址格式异常而失败
+        }
+    }
+
+    private boolean shouldRewriteHost(String host) {
+        if (host == null || host.isBlank()) {
+            return true;
+        }
+        return "127.0.0.1".equals(host)
+            || "0.0.0.0".equals(host)
+            || "localhost".equalsIgnoreCase(host);
     }
 
     /**

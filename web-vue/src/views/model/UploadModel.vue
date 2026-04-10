@@ -9,6 +9,8 @@
       </template>
 
       <p class="hint">
+        内置模型 <code>yolov8s</code>、<code>yolov8n</code> 可直接选择使用。
+        <br />
         同时上传 <code>.rknn</code> 模型文件和对应的 <code>.txt</code> 标签文件，两者须保持同名（扩展名不同）。
         上传后会自动建立模型与标签关联，选择模型时后端会自动把模型和标签下发给视觉服务。
       </p>
@@ -91,22 +93,33 @@
       </template>
 
       <el-table :data="modelProfiles" v-loading="loadingModels" empty-text="暂无模型，请先上传">
-        <el-table-column prop="baseName" label="模型名" min-width="180" />
+        <el-table-column label="模型名" min-width="220">
+          <template #default="{ row }">
+            <div class="model-name-cell">
+              <span>{{ row.baseName }}</span>
+              <el-tag v-if="row.builtin" type="primary" size="small">内置</el-tag>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label=".rknn" width="90" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.modelObjectKey" type="success" size="small">已上传</el-tag>
+            <el-tag v-if="row.builtin" type="primary" size="small">内置</el-tag>
+            <el-tag v-else-if="row.modelObjectKey" type="success" size="small">已上传</el-tag>
             <el-tag v-else type="info" size="small">缺失</el-tag>
           </template>
         </el-table-column>
         <el-table-column label=".txt" width="90" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.labelObjectKey" type="success" size="small">已上传</el-tag>
+            <el-tag v-if="row.builtin" type="primary" size="small">内置</el-tag>
+            <el-tag v-else-if="row.labelObjectKey" type="success" size="small">已上传</el-tag>
             <el-tag v-else type="info" size="small">缺失</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="120" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.ready" type="success" size="small">可切换</el-tag>
+            <el-tag v-if="row.ready" :type="row.builtin ? 'primary' : 'success'" size="small">
+              {{ row.builtin ? '内置可用' : '可切换' }}
+            </el-tag>
             <el-tag v-else type="warning" size="small">不完整</el-tag>
           </template>
         </el-table-column>
@@ -120,7 +133,7 @@
               :loading="selectingModelId === row.id"
               @click="handleSelectModel(row)"
             >
-              设为当前
+              {{ row.builtin ? '使用内置' : '设为当前' }}
             </el-button>
             <el-tag v-else type="success" size="small">当前模型</el-tag>
           </template>
@@ -271,13 +284,13 @@ const loadModelProfiles = async () => {
 
 const handleSelectModel = async (profile: ModelProfile) => {
   if (!profile.ready) {
-    ElMessage.warning('该模型缺少 .rknn 或 .txt 文件，无法切换')
+    ElMessage.warning(profile.builtin ? '内置模型文件缺失，无法切换' : '该模型缺少 .rknn 或 .txt 文件，无法切换')
     return
   }
   selectingModelId.value = profile.id
   try {
     await selectModelProfile(profile.id)
-    ElMessage.success(`已切换到模型：${profile.baseName}`)
+    ElMessage.success(profile.builtin ? `已切换到内置模型：${profile.baseName}` : `已切换到模型：${profile.baseName}`)
     await loadModelProfiles()
   } catch {
     // 错误已由拦截器处理
@@ -321,6 +334,12 @@ onMounted(() => {
   font-size: 18px;
   font-weight: 600;
   color: #0f172a;
+}
+
+.model-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .hint {

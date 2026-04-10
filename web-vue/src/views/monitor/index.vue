@@ -744,8 +744,20 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
   return fallback
 }
 
+const getCurrentStreamHost = (): string => {
+  if (typeof window === 'undefined') return '127.0.0.1'
+  return window.location.hostname.trim() || '127.0.0.1'
+}
+
+const buildDefaultRtspUrl = (path: string): string => {
+  return `rtsp://${getCurrentStreamHost()}:8554/${path}`
+}
+
 const buildModelOptionLabel = (profile: ModelProfile): string => {
-  if (profile.ready) return profile.baseName
+  if (profile.ready) {
+    return profile.builtin ? `${profile.baseName}（内置）` : profile.baseName
+  }
+  if (profile.builtin) return `${profile.baseName}（内置文件缺失）`
   return `${profile.baseName}（缺少.rknn或.txt）`
 }
 
@@ -773,7 +785,7 @@ const fetchModelProfiles = async (silent = true) => {
     modelProfiles.value = Array.isArray(profiles) ? profiles : []
     syncSelectedModelProfile()
     if (!silent && readyModelProfiles.value.length === 0) {
-      ElMessage.warning('暂无可用模型，请先上传 .rknn 和同名 .txt')
+      ElMessage.warning('暂无可用模型，请先上传 .rknn 和同名 .txt，或检查内置模型文件')
     }
   } catch (error) {
     console.error('获取模型列表失败:', error)
@@ -800,14 +812,18 @@ const applySelectedModelProfile = async (silent = false): Promise<boolean> => {
   const profile = selectedModelProfile.value
   if (!profile) {
     if (!silent) {
-      ElMessage.warning('暂无可用模型，请先上传 .rknn 和同名 .txt')
+      ElMessage.warning('暂无可用模型，请先上传 .rknn 和同名 .txt，或检查内置模型文件')
     }
     return false
   }
 
   if (!profile.ready) {
     if (!silent) {
-      ElMessage.warning(`模型 ${profile.baseName} 未就绪，请确保已上传 .rknn 和 .txt`)
+      ElMessage.warning(
+        profile.builtin
+          ? `内置模型 ${profile.baseName} 不可用，请检查内置模型文件`
+          : `模型 ${profile.baseName} 未就绪，请确保已上传 .rknn 和 .txt`
+      )
     }
     return false
   }
@@ -833,13 +849,17 @@ const handleModelProfileChange = async (value: number | null) => {
   if (!profile) return
 
   if (!objectDetectionEnabled.value) {
-    ElMessage.success(`已选择模型 ${profile.baseName}，开启目标检测时自动加载`)
+    ElMessage.success(
+      profile.builtin
+        ? `已选择内置模型 ${profile.baseName}，开启目标检测时自动加载`
+        : `已选择模型 ${profile.baseName}，开启目标检测时自动加载`
+    )
     return
   }
 
   const applied = await applySelectedModelProfile(false)
   if (applied) {
-    ElMessage.success(`模型已切换为 ${profile.baseName}`)
+    ElMessage.success(profile.builtin ? `模型已切换为内置 ${profile.baseName}` : `模型已切换为 ${profile.baseName}`)
   }
 }
 
@@ -1739,15 +1759,19 @@ const autoSelectDefaultCameras = () => {
       id: 1,
       name: '摄像头1',
       location: '校园门口',
-      rtspUrl: 'rtsp://192.168.137.224:8554/cam0',
-      status: 1
+      rtspUrl: buildDefaultRtspUrl('cam0'),
+      status: 1,
+      isEnabled: true,
+      detectionEnabled: true
     },
     {
       id: 2,
       name: '摄像头2',
       location: '教学楼',
-      rtspUrl: 'rtsp://192.168.137.224:8554/cam1',
-      status: 1
+      rtspUrl: buildDefaultRtspUrl('cam1'),
+      status: 1,
+      isEnabled: true,
+      detectionEnabled: true
     }
   ]
 
