@@ -86,7 +86,40 @@ curl -X POST "http://127.0.0.1:8091/api/inference/off"
 - 前端提交禁入区后，视觉服务会周期同步（默认约 2 秒一次）。
 - 通常 1-2 秒后画面中的四边形会更新。
 
-## 8. 切换到 WebRTC 低延迟播放
+## 8. 实时监控录像
+
+监控页现在已经支持：
+
+- 选择录像摄像头（`cam0 / cam1`）
+- 开始录像 / 停止录像
+- 查看录像文件列表
+- 下载 `.mp4` 文件
+
+前端调用的后端接口为：
+
+- `GET /api/rknn/record/status`
+- `POST /api/rknn/record/start?cameraId=1|2`
+- `POST /api/rknn/record/stop?cameraId=1|2`
+- `GET /api/rknn/record/files?cameraId=1|2`
+- `GET /api/rknn/record/file?name=...`
+
+说明：
+
+- `cameraId=1` 对应视觉服务 `cam0`
+- `cameraId=2` 对应视觉服务 `cam1`
+- 如果“录像文件”弹窗返回 `404`，通常是后端还没重启到新版本
+
+## 9. 监控页刷新与显示规则
+
+实时监控页现在采用“固定双路默认流 + 数据库设备列表补充”的策略：
+
+- 首次进入页面会默认补 `cam0`、`cam1`
+- 点击“刷新”后，会重新拉取后端摄像头列表
+- 同时仍会补齐默认双路，不会再出现“点一次刷新后只剩一个摄像头”的情况
+
+另外，“监控设备”列表中的默认双路占位设备，如果位置只是示例文案，列表会优先展示 RTSP 地址；如果后端把 `camera.name` 直接填成了 `rtsp://...`，前端会自动回退成可读名称，例如 `摄像头1 (cam0)`。
+
+## 10. 切换到 WebRTC 低延迟播放
 
 前端默认走 HLS。要切到 WebRTC，可在 `web-vue/.env.local` 或 `.env.development` 中设置：
 
@@ -117,9 +150,13 @@ npm run dev -- --host 0.0.0.0 --port 3000
 - 不设置该变量或设为 `hls` 时，保持原 HLS 播放。
 - 如果修改过 `.env.local`，浏览器建议执行一次强制刷新：`Ctrl + Shift + R`
 
-## 9. 常见问题
+## 11. 常见问题
 
-### 1. 实时监控仍然连旧 IP
+### 1. 实时监控仍然显示 RTSP 地址作为摄像头名称
+
+监控页现在会优先显示可读名称；如果浏览器仍然显示旧文案，执行一次强制刷新：`Ctrl + Shift + R`
+
+### 2. 实时监控仍然连旧 IP
 
 先检查：
 
@@ -135,7 +172,7 @@ VITE_WEBRTC_BASE_URL=http://旧IP:8889
 
 请删除或改成新的流媒体主机地址，然后重启前端。
 
-### 2. 摄像头 busy / 8091 端口占用
+### 3. 摄像头 busy / 8091 端口占用
 
 通常是旧的视觉服务没退出干净：
 
@@ -146,7 +183,7 @@ printf 'orangepi\n' | sudo -S fuser -v /dev/video0 /dev/video2 || true
 ss -ltnp | grep -E '8091|8554|8889' || true
 ```
 
-### 3. Dashboard 获取禁入区当前帧返回 503
+### 4. Dashboard 获取禁入区当前帧返回 503
 
 接口：
 

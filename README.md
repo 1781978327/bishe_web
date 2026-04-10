@@ -2,7 +2,7 @@
 
 基于 `Vue 3 + Spring Boot + RK3588 RKNN` 的一体化校园安全监测系统，当前整合了三条主线能力：
 
-- 视觉监控：双路摄像头推理、目标跟踪、禁入区、RTSP / WebRTC 播放
+- 视觉监控：双路摄像头推理、目标跟踪、禁入区、RTSP / WebRTC 播放、摄像头录像
 - 声音异常：声音分析服务与异常记录联动
 - 环境监测：温湿度、烟雾、光照等传感器读取与展示
 
@@ -118,6 +118,24 @@ curl -X POST "http://127.0.0.1:8080/api/rknn/inference/on?track=true&tracker=byt
 curl -X POST "http://127.0.0.1:8080/api/rknn/rtsp/camera/start"
 ```
 
+## 录像功能
+
+当前录像链路已经打通到三层：
+
+- 视觉服务：负责真正录像，文件默认落在 `yolov8-rk3588-cpp-3-15/recordings/camera`
+- Spring Boot：提供录像状态、开始/停止、文件列表、文件下载代理
+- 前端实时监控：提供“录像摄像头”选择框、“开始/停止录像”按钮和“录像文件”弹窗
+
+常用后端接口：
+
+```bash
+curl http://127.0.0.1:8080/api/rknn/record/status
+curl -X POST "http://127.0.0.1:8080/api/rknn/record/start?cameraId=1"
+curl -X POST "http://127.0.0.1:8080/api/rknn/record/stop?cameraId=1"
+curl "http://127.0.0.1:8080/api/rknn/record/files?cameraId=1"
+curl -O -J "http://127.0.0.1:8080/api/rknn/record/file?name=cam0_20260410_183910.mp4"
+```
+
 ## 模型说明
 
 当前后端模型管理同时支持两类来源：
@@ -203,6 +221,33 @@ ss -ltnp | grep -E '8091|8554|8889' || true
 - `VITE_WEBRTC_BASE_URL=http://旧IP:8889`
 
 前端就会强制走这个旧地址。当前建议默认不写这一项。
+
+### 4. 录像文件列表返回 404
+
+如果前端“录像文件”弹窗请求：
+
+- `/api/rknn/record/files`
+- `/api/rknn/record/file`
+
+返回 `404`，通常是 Spring Boot 仍在运行旧进程，尚未加载新增录像路由。重启后端即可：
+
+```bash
+pkill -f 'com.example.demo.DemoApplication' || true
+pkill -f 'gradle.*bootRun' || true
+
+cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
+./gradlew bootRun
+```
+
+### 5. 删除检测记录返回 405
+
+当前后端已支持：
+
+- `DELETE /api/detection/record/{id}`
+- `DELETE /api/detection/record/batch`
+- `DELETE /api/detection/record/clear-all`
+
+如果页面仍然提示 `405 Method Not Allowed`，同样优先检查后端是否还是旧进程。
 
 ## 默认账户
 

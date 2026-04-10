@@ -84,6 +84,50 @@
         <div class="panel-header">
           <h3>校园安全监控</h3>
           <div class="panel-actions">
+            <el-select
+              v-model="selectedRecordingCameraId"
+              class="recording-camera-select"
+              size="small"
+              placeholder="选择录像摄像头"
+            >
+              <el-option
+                v-for="cameraOption in recordingCameraOptions"
+                :key="cameraOption.id"
+                :label="cameraOption.label"
+                :value="cameraOption.id"
+              />
+            </el-select>
+            <el-tag
+              v-if="selectedRecordingStatus"
+              :type="selectedRecordingStatus.recording ? 'danger' : 'info'"
+              effect="dark"
+            >
+              {{ selectedRecordingCameraLabel }}{{ selectedRecordingStatus.recording ? '录像中' : '未录像' }}
+            </el-tag>
+            <el-tooltip
+              v-if="selectedRecordingCameraId !== null"
+              :content="selectedRecordingStatus?.recording ? `停止${selectedRecordingCameraLabel}录像` : `开始录制${selectedRecordingCameraLabel}`"
+              placement="top"
+              effect="dark"
+            >
+              <el-button
+                :type="selectedRecordingStatus?.recording ? 'danger' : 'primary'"
+                size="small"
+                plain
+                :loading="recordingActionLoading"
+                @click="toggleCameraRecording"
+              >
+                <el-icon>
+                  <VideoPause v-if="selectedRecordingStatus?.recording" />
+                  <VideoPlay v-else />
+                </el-icon>
+                {{ selectedRecordingStatus?.recording ? '停止录像' : '开始录像' }}
+              </el-button>
+            </el-tooltip>
+            <el-button size="small" plain @click="openRecordingFilesDialog">
+              <el-icon><FolderOpened /></el-icon>
+              录像文件
+            </el-button>
             <el-tooltip content="清空所有显示" placement="top" effect="dark">
               <el-button 
                 type="danger" 
@@ -145,7 +189,7 @@
         <div class="detection-panel">
           <div class="panel-header">
             <h3>安全事件记录</h3>
-            <span v-if="activeCamera">- {{ activeCamera.name }}</span>
+            <span v-if="activeCamera">- {{ getCameraDisplayName(activeCamera) }}</span>
           </div>
           
           <template v-if="activeCamera">
@@ -233,10 +277,11 @@
                       }"></div>
                     </div>
                     <div class="camera-details">
-                      <span class="name">{{ camera.name }}</span>
+                      <span class="name">{{ getCameraDisplayName(camera) }}</span>
                       <span class="location">
                         <el-icon><LocationFilled /></el-icon>
-                        {{ camera.location }}
+                        <span class="location-label">{{ getCameraLocationLabel(camera) }}：</span>
+                        <span class="location-text">{{ getCameraLocationDisplay(camera) }}</span>
                       </span>
                       <span class="status" :class="{
                         'online': camera.status === 1,
@@ -279,7 +324,7 @@
         <div class="camera-info">
           <div class="info-item">
             <span class="label">设备名称：</span>
-            <span class="value">{{ activeCamera.name }}</span>
+            <span class="value">{{ getCameraDisplayName(activeCamera) }}</span>
           </div>
           <div class="info-item">
             <span class="label">安装位置：</span>
@@ -294,6 +339,24 @@
             <el-tag :type="getStatusTagType(activeCamera.status)">
               {{ formatDeviceStatus(activeCamera.status) }}
             </el-tag>
+          </div>
+          <div class="info-item">
+            <span class="label">录像状态：</span>
+            <el-tag :type="activeRecordingStatus?.recording ? 'danger' : 'info'">
+              {{ activeRecordingStatus?.recording ? '录像中' : '未录像' }}
+            </el-tag>
+          </div>
+          <div v-if="activeRecordingStatus?.file" class="info-item">
+            <span class="label">录像文件：</span>
+            <span class="value recording-file">{{ formatRecordingFileName(activeRecordingStatus.file) }}</span>
+          </div>
+          <div v-if="activeRecordingStatus?.startedAt" class="info-item">
+            <span class="label">开始时间：</span>
+            <span class="value">{{ activeRecordingStatus.startedAt }}</span>
+          </div>
+          <div v-if="activeRecordingStatus?.error" class="info-item recording-error">
+            <span class="label">录像错误：</span>
+            <span class="value">{{ activeRecordingStatus.error }}</span>
           </div>
         </div>
 
@@ -373,6 +436,60 @@
         </div>
       </template>
     </el-drawer>
+
+    <el-dialog
+      v-model="recordingFilesDialogVisible"
+      title="录像文件"
+      width="820px"
+      destroy-on-close
+    >
+      <div class="recording-files-toolbar">
+        <el-select
+          v-model="selectedRecordingCameraId"
+          class="recording-camera-select"
+          size="small"
+          placeholder="筛选摄像头"
+          @change="handleRecordingCameraChange"
+        >
+          <el-option
+            v-for="cameraOption in recordingCameraOptions"
+            :key="cameraOption.id"
+            :label="cameraOption.label"
+            :value="cameraOption.id"
+          />
+        </el-select>
+        <el-button size="small" @click="() => loadRecordingFiles(false)" :loading="recordingFilesLoading">
+          <el-icon><Refresh /></el-icon>
+          刷新文件
+        </el-button>
+      </div>
+
+      <el-table v-loading="recordingFilesLoading" :data="recordingFiles" stripe>
+        <el-table-column prop="cameraLabel" label="摄像头" width="110" />
+        <el-table-column prop="name" label="文件名" min-width="240" show-overflow-tooltip />
+        <el-table-column prop="sizeText" label="大小" width="110" />
+        <el-table-column prop="modifiedAtText" label="更新时间" width="180" />
+        <el-table-column label="状态" width="110">
+          <template #default="scope">
+            <el-tag :type="scope.row.active ? 'danger' : 'info'" size="small">
+              {{ scope.row.active ? '当前录像' : '已完成' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="scope">
+            <el-button type="primary" link @click="downloadRecordingFile(scope.row)">
+              <el-icon><Download /></el-icon>
+              下载
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="!recordingFilesLoading && recordingFiles.length === 0" class="recording-files-empty">
+        当前摄像头还没有录像文件
+      </div>
+    </el-dialog>
 
     <!-- 短信通知设置对话框 -->
     <el-dialog
@@ -592,7 +709,7 @@ import {
   Monitor, Grid, Refresh, VideoCameraFilled, Select,
   PictureFilled, Warning, Picture as PictureIcon, Close, Delete, Message, Plus,
   ChatDotRound, VideoCamera, Clock, User, ChatLineRound, InfoFilled, Timer,
-  ArrowUp, ArrowDown, LocationFilled, Setting
+  ArrowUp, ArrowDown, LocationFilled, Setting, VideoPlay, VideoPause, FolderOpened, Download
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -613,6 +730,9 @@ const drawerVisible = ref(false)
 const loading = ref(false)
 // 服务器端绘制检测框状态
 const serverDrawEnabled = ref(false)
+const recordingActionLoading = ref(false)
+const recordingFilesDialogVisible = ref(false)
+const recordingFilesLoading = ref(false)
 
 // 近期检测记录
 const recentDetections = ref<DetectionRecord[]>([])
@@ -674,6 +794,151 @@ const readyModelProfiles = computed(() => {
 const selectedModelProfile = computed(() => {
   if (selectedModelProfileId.value === null) return null
   return modelProfiles.value.find(profile => profile.id === selectedModelProfileId.value) ?? null
+})
+
+type RecordingStatusItem = {
+  recording: boolean
+  file: string
+  log: string
+  startedAt: string
+  error: string
+}
+
+type RecordingFileItem = {
+  name: string
+  cameraId: number
+  cameraKey: string
+  cameraLabel: string
+  size: number
+  sizeText: string
+  modifiedAt: string
+  modifiedAtText: string
+  downloadUrl: string
+  active: boolean
+}
+
+const createEmptyRecordingStatus = (): RecordingStatusItem => ({
+  recording: false,
+  file: '',
+  log: '',
+  startedAt: '',
+  error: ''
+})
+
+const recordingStatus = ref<{
+  outputDir: string
+  ffmpegBin: string
+  cam0: RecordingStatusItem
+  cam1: RecordingStatusItem
+}>({
+  outputDir: '',
+  ffmpegBin: '',
+  cam0: createEmptyRecordingStatus(),
+  cam1: createEmptyRecordingStatus()
+})
+
+const selectedRecordingCameraId = ref<number | null>(1)
+const recordingFiles = ref<RecordingFileItem[]>([])
+
+const resolveRecordingCameraKey = (camera?: Camera | null): 'cam0' | 'cam1' | null => {
+  if (!camera) return null
+  if (camera.id === 1) return 'cam0'
+  if (camera.id === 2) return 'cam1'
+  if (camera.rtspUrl.includes('/cam0')) return 'cam0'
+  if (camera.rtspUrl.includes('/cam1')) return 'cam1'
+  return null
+}
+
+const resolveRecordingCameraId = (camera?: Camera | null): number | null => {
+  const key = resolveRecordingCameraKey(camera)
+  if (key === 'cam0') return 1
+  if (key === 'cam1') return 2
+  return null
+}
+
+const isRtspLikeText = (value: string): boolean => {
+  const normalized = value.trim().toLowerCase()
+  return normalized.startsWith('rtsp://')
+    || normalized.startsWith('rtmp://')
+    || normalized.startsWith('http://')
+    || normalized.startsWith('https://')
+}
+
+const getDefaultCameraDisplayName = (camera: Camera): string => {
+  const mappedId = resolveRecordingCameraId(camera)
+  if (mappedId === 1) return '摄像头1 (cam0)'
+  if (mappedId === 2) return '摄像头2 (cam1)'
+  return `摄像头${camera.id}`
+}
+
+const getCameraDisplayName = (camera?: Camera | null): string => {
+  if (!camera) return '未命名摄像头'
+  const name = (camera.name || '').trim()
+  if (name && !isRtspLikeText(name) && name !== camera.rtspUrl) {
+    return name
+  }
+  return getDefaultCameraDisplayName(camera)
+}
+
+const recordingCameraOptions = computed(() => {
+  const defaultOptions = [
+    { id: 1, label: '摄像头1 (cam0)' },
+    { id: 2, label: '摄像头2 (cam1)' }
+  ]
+  const labels = new Map<number, string>(defaultOptions.map(item => [item.id, item.label]))
+
+  cameras.value.forEach(camera => {
+    if (camera.id === 1 || camera.id === 2) {
+      const suffix = camera.id === 1 ? 'cam0' : 'cam1'
+      labels.set(camera.id, `${getCameraDisplayName(camera)} (${suffix})`)
+    }
+  })
+
+  return defaultOptions.map(item => ({
+    id: item.id,
+    label: labels.get(item.id) ?? item.label
+  }))
+})
+
+const activeRecordingStatus = computed<RecordingStatusItem | null>(() => {
+  const key = resolveRecordingCameraKey(activeCamera.value)
+  if (!key) return null
+  return recordingStatus.value[key]
+})
+
+const usesPlaceholderLocation = (camera: Camera): boolean => {
+  const location = (camera.location || '').trim()
+  const name = (camera.name || '').trim()
+  const isDefaultName = name === '摄像头1' || name === '摄像头2'
+  const isPlaceholder = location === '' || location === '校园门口' || location === '教学楼'
+  return isDefaultName && isPlaceholder
+}
+
+const getCameraLocationLabel = (camera: Camera): string => {
+  if (usesPlaceholderLocation(camera) && camera.rtspUrl) {
+    return 'RTSP'
+  }
+  return '位置'
+}
+
+const getCameraLocationDisplay = (camera: Camera): string => {
+  if (usesPlaceholderLocation(camera) && camera.rtspUrl) {
+    return camera.rtspUrl
+  }
+  if (camera.location && camera.location.trim()) {
+    return camera.location
+  }
+  return camera.rtspUrl || '未配置'
+}
+
+const selectedRecordingCameraLabel = computed(() => {
+  return recordingCameraOptions.value.find(item => item.id === selectedRecordingCameraId.value)?.label ?? '录像摄像头'
+})
+
+const selectedRecordingStatus = computed<RecordingStatusItem | null>(() => {
+  if (selectedRecordingCameraId.value === 1) return recordingStatus.value.cam0
+  if (selectedRecordingCameraId.value === 2) return recordingStatus.value.cam1
+  return null
 })
 
 // 目标检测阈值配置
@@ -955,6 +1220,196 @@ const getRknnOperationErrorMessage = (payload: any, fallback: string): string =>
   }
   if (typeof payload.msg === 'string' && payload.msg.trim()) return payload.msg
   return fallback
+}
+
+const parseRecordingStatusItem = (raw: any): RecordingStatusItem => {
+  return {
+    recording: parseBooleanLike(raw?.recording) ?? false,
+    file: typeof raw?.file === 'string' ? raw.file : '',
+    log: typeof raw?.log === 'string' ? raw.log : '',
+    startedAt: typeof raw?.started_at === 'string'
+      ? raw.started_at
+      : (typeof raw?.startedAt === 'string' ? raw.startedAt : ''),
+    error: typeof raw?.error === 'string' ? raw.error : ''
+  }
+}
+
+const syncRecordingStatusFromServer = async (silent = true): Promise<boolean> => {
+  try {
+    const res = await fetch('/api/rknn/record/status')
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+
+    const payload = await res.json()
+    if (payload?.code !== 200 || !payload?.data) {
+      throw new Error(getRknnOperationErrorMessage(payload, '未获取到录像状态'))
+    }
+
+    const data = payload.data
+    recordingStatus.value = {
+      outputDir: typeof data.record_output_dir === 'string' ? data.record_output_dir : '',
+      ffmpegBin: typeof data.record_ffmpeg_bin === 'string' ? data.record_ffmpeg_bin : '',
+      cam0: parseRecordingStatusItem(data.cam0),
+      cam1: parseRecordingStatusItem(data.cam1)
+    }
+    return true
+  } catch (err) {
+    console.error('同步录像状态失败:', err)
+    if (!silent) {
+      ElMessage.warning('未获取到录像状态，页面已保留当前显示')
+    }
+    return false
+  }
+}
+
+const formatRecordingFileName = (path: string): string => {
+  if (!path) return ''
+  const normalized = path.replace(/\\/g, '/')
+  const parts = normalized.split('/')
+  return parts[parts.length - 1] || path
+}
+
+const formatRecordingFileSize = (size: number): string => {
+  if (!Number.isFinite(size) || size <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = size
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+const formatRecordingDateTime = (value: string): string => {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  })
+}
+
+const getRecordingStateByCameraId = (cameraId: number): RecordingStatusItem => {
+  return cameraId === 2 ? recordingStatus.value.cam1 : recordingStatus.value.cam0
+}
+
+const parseRecordingFile = (raw: any): RecordingFileItem => {
+  const cameraId = raw?.cameraId === 2 ? 2 : 1
+  const name = typeof raw?.name === 'string' ? raw.name : ''
+  const size = typeof raw?.size === 'number' ? raw.size : Number(raw?.size ?? 0)
+  const modifiedAt = typeof raw?.modifiedAt === 'string' ? raw.modifiedAt : ''
+  const cameraLabel = recordingCameraOptions.value.find(item => item.id === cameraId)?.label
+    ?? (cameraId === 2 ? '摄像头2 (cam1)' : '摄像头1 (cam0)')
+  const activeFile = formatRecordingFileName(getRecordingStateByCameraId(cameraId).file)
+
+  return {
+    name,
+    cameraId,
+    cameraKey: typeof raw?.cameraKey === 'string' ? raw.cameraKey : (cameraId === 2 ? 'cam1' : 'cam0'),
+    cameraLabel,
+    size,
+    sizeText: formatRecordingFileSize(size),
+    modifiedAt,
+    modifiedAtText: formatRecordingDateTime(modifiedAt),
+    downloadUrl: typeof raw?.downloadUrl === 'string' ? raw.downloadUrl : `/api/rknn/record/file?name=${encodeURIComponent(name)}`,
+    active: !!name && activeFile === name
+  }
+}
+
+const loadRecordingFiles = async (silent = false): Promise<boolean> => {
+  recordingFilesLoading.value = true
+  try {
+    const query = selectedRecordingCameraId.value !== null ? `?cameraId=${selectedRecordingCameraId.value}` : ''
+    const res = await fetch(`/api/rknn/record/files${query}`)
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+
+    const payload = await res.json()
+    if (payload?.code !== 200 || !payload?.data) {
+      throw new Error(getRknnOperationErrorMessage(payload, '未获取到录像文件列表'))
+    }
+
+    const files = Array.isArray(payload.data.files) ? payload.data.files : []
+    recordingFiles.value = files.map((item: any) => parseRecordingFile(item))
+    return true
+  } catch (err) {
+    console.error('获取录像文件列表失败:', err)
+    if (!silent) {
+      ElMessage.error('获取录像文件列表失败')
+    }
+    return false
+  } finally {
+    recordingFilesLoading.value = false
+  }
+}
+
+const openRecordingFilesDialog = async () => {
+  recordingFilesDialogVisible.value = true
+  await loadRecordingFiles(false)
+}
+
+const handleRecordingCameraChange = async () => {
+  if (recordingFilesDialogVisible.value) {
+    await loadRecordingFiles(true)
+  }
+}
+
+const downloadRecordingFile = (file: RecordingFileItem) => {
+  if (!file.downloadUrl) {
+    ElMessage.warning('该录像文件暂时不可下载')
+    return
+  }
+  window.open(file.downloadUrl, '_blank')
+}
+
+const toggleCameraRecording = async () => {
+  if (recordingActionLoading.value) return
+  if (selectedRecordingCameraId.value === null) {
+    ElMessage.warning('请先选择要录像的摄像头')
+    return
+  }
+
+  recordingActionLoading.value = true
+  const cameraId = selectedRecordingCameraId.value
+  const currentlyRecording = selectedRecordingStatus.value?.recording ?? false
+
+  try {
+    const endpoint = currentlyRecording
+      ? `/api/rknn/record/stop?cameraId=${cameraId}`
+      : `/api/rknn/record/start?cameraId=${cameraId}`
+    const res = await fetch(endpoint, { method: 'POST' })
+    const data = await res.json()
+
+    if (isRknnOperationSuccess(data)) {
+      await syncRecordingStatusFromServer(true)
+      if (recordingFilesDialogVisible.value) {
+        await loadRecordingFiles(true)
+      }
+      ElMessage.success(
+        currentlyRecording
+          ? `已停止${selectedRecordingCameraLabel.value}录像`
+          : `已开始录制${selectedRecordingCameraLabel.value}`
+      )
+    } else {
+      ElMessage.error(
+        getRknnOperationErrorMessage(data, currentlyRecording ? '停止录像失败' : '开始录像失败')
+      )
+    }
+  } catch (err) {
+    console.error('切换录像状态失败:', err)
+    ElMessage.error(currentlyRecording ? '停止录像失败' : '开始录像失败')
+  } finally {
+    recordingActionLoading.value = false
+  }
 }
 
 const syncDetectionToggleFromServer = async (silent = true): Promise<boolean> => {
@@ -1294,6 +1749,10 @@ watch(() => layout.value, () => {
 // 处理摄像头点击
 const handleCameraClick = (camera: Camera) => {
   activeCamera.value = camera
+  const recordingCameraId = resolveRecordingCameraId(camera)
+  if (recordingCameraId !== null) {
+    selectedRecordingCameraId.value = recordingCameraId
+  }
   drawerVisible.value = true
 }
 
@@ -1528,6 +1987,10 @@ const handleCameraSelect = (camera: Camera) => {
   }
   
   activeCamera.value = camera
+  const recordingCameraId = resolveRecordingCameraId(camera)
+  if (recordingCameraId !== null) {
+    selectedRecordingCameraId.value = recordingCameraId
+  }
   
   // 查询该摄像头的近期检测记录
   fetchRecentDetections(camera.id)
@@ -1680,6 +2143,60 @@ const sleep = (ms: number) => new Promise<void>((resolve) => {
   window.setTimeout(resolve, ms)
 })
 
+const buildDefaultCameras = (): Camera[] => [
+  {
+    id: 1,
+    name: '摄像头1',
+    location: '校园门口',
+    rtspUrl: buildDefaultRtspUrl('cam0'),
+    status: 1,
+    isEnabled: true,
+    detectionEnabled: true
+  },
+  {
+    id: 2,
+    name: '摄像头2',
+    location: '教学楼',
+    rtspUrl: buildDefaultRtspUrl('cam1'),
+    status: 1,
+    isEnabled: true,
+    detectionEnabled: true
+  }
+]
+
+const ensureDefaultCamerasInList = () => {
+  const defaults = buildDefaultCameras()
+  defaults.forEach(defaultCamera => {
+    if (!cameras.value.find(camera => camera.id === defaultCamera.id)) {
+      cameras.value.push(defaultCamera)
+    }
+  })
+}
+
+const resolveCameraAfterRefresh = (cameraId?: number): Camera | undefined => {
+  if (cameraId == null) return undefined
+  return cameras.value.find(camera => camera.id === cameraId)
+}
+
+const restoreDisplayCamerasAfterRefresh = (previousDisplayIds: number[], previousActiveId?: number) => {
+  const restored = previousDisplayIds
+    .map(cameraId => resolveCameraAfterRefresh(cameraId))
+    .filter((camera): camera is Camera => !!camera)
+    .slice(0, layout.value)
+
+  if (restored.length > 0) {
+    displayCameras.value = restored
+    activeCamera.value = restored.find(camera => camera.id === previousActiveId) ?? restored[0]
+    const recordingCameraId = resolveRecordingCameraId(activeCamera.value)
+    if (recordingCameraId !== null) {
+      selectedRecordingCameraId.value = recordingCameraId
+    }
+    return
+  }
+
+  autoSelectDefaultCameras()
+}
+
 // 初始化
 onMounted(async () => {
   // 初始化默认接收人
@@ -1700,6 +2217,7 @@ onMounted(async () => {
 
   // 从视觉模块同步目标检测实时状态，避免仅依赖本地缓存导致开关显示不准
   await syncDetectionToggleFromServer(true)
+  await syncRecordingStatusFromServer(true)
 
   // 获取摄像头列表
   await fetchCameras()
@@ -1721,10 +2239,14 @@ onMounted(async () => {
   autoSelectDefaultCameras()
 
   // 启动定时获取检测数量
-  detectionCountInterval.value = setInterval(fetchDetectionCounts, 2000)
+  detectionCountInterval.value = window.setInterval(fetchDetectionCounts, 2000)
+  recordingStatusInterval.value = window.setInterval(() => {
+    void syncRecordingStatusFromServer(true)
+  }, 5000)
 })
 
 let detectionCountInterval = ref<number | null>(null)
+let recordingStatusInterval = ref<number | null>(null)
 
 // 自动开启推流
 const startRtspStream = async (): Promise<boolean> => {
@@ -1753,37 +2275,13 @@ const startRtspStream = async (): Promise<boolean> => {
 
 // 默认选择前两个摄像头
 const autoSelectDefaultCameras = () => {
-  // 默认使用 cam0 和 cam1 两个摄像头
-  const defaultCameras: Camera[] = [
-    {
-      id: 1,
-      name: '摄像头1',
-      location: '校园门口',
-      rtspUrl: buildDefaultRtspUrl('cam0'),
-      status: 1,
-      isEnabled: true,
-      detectionEnabled: true
-    },
-    {
-      id: 2,
-      name: '摄像头2',
-      location: '教学楼',
-      rtspUrl: buildDefaultRtspUrl('cam1'),
-      status: 1,
-      isEnabled: true,
-      detectionEnabled: true
-    }
-  ]
+  const defaultCameras = buildDefaultCameras()
 
   displayCameras.value = defaultCameras
   activeCamera.value = defaultCameras[0]
+  selectedRecordingCameraId.value = 1
 
-  // 将默认摄像头添加到摄像头列表（如果不存在）
-  defaultCameras.forEach(cam => {
-    if (!cameras.value.find(c => c.id === cam.id)) {
-      cameras.value.push(cam)
-    }
-  })
+  ensureDefaultCamerasInList()
 
   // 查询第一个摄像头的检测记录
   fetchRecentDetections(defaultCameras[0].id)
@@ -1794,6 +2292,9 @@ onBeforeUnmount(() => {
   // 停止定时获取检测数量
   if (detectionCountInterval.value) {
     clearInterval(detectionCountInterval.value)
+  }
+  if (recordingStatusInterval.value) {
+    clearInterval(recordingStatusInterval.value)
   }
 
   // 停止所有视频流
@@ -1828,6 +2329,9 @@ const handleBeforeUnload = () => {
 
 // 刷新摄像头列表
 const refreshCameras = async () => {
+  const previousDisplayIds = displayCameras.value.map(camera => camera.id)
+  const previousActiveId = activeCamera.value?.id
+
   // 停止所有视频流
   displayCameras.value.forEach(camera => {
     wsClient.send({
@@ -1844,8 +2348,12 @@ const refreshCameras = async () => {
   // 重新获取摄像头列表与模型列表
   await Promise.all([
     fetchCameras(),
-    fetchModelProfiles(true)
+    fetchModelProfiles(true),
+    syncRecordingStatusFromServer(true)
   ])
+
+  ensureDefaultCamerasInList()
+  restoreDisplayCamerasAfterRefresh(previousDisplayIds, previousActiveId)
 }
 
 // 格式化时间
@@ -2022,6 +2530,12 @@ const formatLastSentTime = (timestamp: number | null): string => {
         .panel-actions {
           display: flex;
           gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+
+          .recording-camera-select {
+            width: 180px;
+          }
         }
       }
     }
@@ -2349,9 +2863,23 @@ const formatLastSentTime = (timestamp: number | null): string => {
             display: flex;
             align-items: center;
             gap: 4px;
+            min-width: 0;
             
             .el-icon {
               font-size: 12px;
+              flex-shrink: 0;
+            }
+
+            .location-label {
+              flex-shrink: 0;
+              color: var(--el-text-color-secondary);
+            }
+
+            .location-text {
+              min-width: 0;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
             }
           }
           
@@ -2402,6 +2930,41 @@ const formatLastSentTime = (timestamp: number | null): string => {
       color: var(--el-text-color-primary);
     }
   }
+
+  .recording-file {
+    display: inline-block;
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+  }
+
+  .recording-error {
+    .value {
+      color: var(--el-color-danger);
+      line-height: 1.5;
+    }
+  }
+}
+
+.recording-files-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+
+  .recording-camera-select {
+    width: 200px;
+  }
+}
+
+.recording-files-empty {
+  padding: 18px 0 4px;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 .detection-results {

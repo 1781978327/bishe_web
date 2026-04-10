@@ -6,6 +6,8 @@ import com.example.demo.service.RknnService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -14,6 +16,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.nio.charset.StandardCharsets;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -142,6 +147,124 @@ public class RknnController {
         } catch (Exception e) {
             log.error("开启摄像头推流失败", e);
             return Result.error(500, "开启摄像头推流失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 获取录像状态
+     */
+    @GetMapping("/record/status")
+    public Result<Map<String, Object>> getRecordingStatus() {
+        try {
+            Map<String, Object> result = rknnService.getRecordingStatus();
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "获取录像状态失败");
+                return Result.error(statusCode, message);
+            }
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("获取录像状态失败", e);
+            return Result.error(500, "获取录像状态失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 开始录像
+     * @param cameraId 1 表示 cam0，2 表示 cam1
+     * @param name 可选，自定义输出文件名
+     */
+    @PostMapping("/record/start")
+    public Result<Map<String, Object>> startRecording(
+            @RequestParam Integer cameraId,
+            @RequestParam(required = false) String name) {
+        try {
+            log.info("开始录像, cameraId={}, name={}", cameraId, name);
+            Map<String, Object> result = rknnService.startCameraRecording(cameraId, name);
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "开始录像失败");
+                return Result.error(statusCode, message);
+            }
+            return Result.success(result);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("开始录像失败", e);
+            return Result.error(500, "开始录像失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 停止录像
+     * @param cameraId 可选；不传时停止全部录像
+     */
+    @PostMapping("/record/stop")
+    public Result<Map<String, Object>> stopRecording(@RequestParam(required = false) Integer cameraId) {
+        try {
+            log.info("停止录像, cameraId={}", cameraId);
+            Map<String, Object> result = rknnService.stopCameraRecording(cameraId);
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "停止录像失败");
+                return Result.error(statusCode, message);
+            }
+            return Result.success(result);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("停止录像失败", e);
+            return Result.error(500, "停止录像失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 获取录像文件列表
+     * @param cameraId 可选；1 表示 cam0，2 表示 cam1，不传时返回全部
+     */
+    @GetMapping("/record/files")
+    public Result<Map<String, Object>> listRecordingFiles(@RequestParam(required = false) Integer cameraId) {
+        try {
+            Map<String, Object> result = rknnService.listRecordingFiles(cameraId);
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "获取录像文件列表失败");
+                return Result.error(statusCode, message);
+            }
+            return Result.success(result);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("获取录像文件列表失败", e);
+            return Result.error(500, "获取录像文件列表失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 下载录像文件
+     */
+    @GetMapping("/record/file")
+    public ResponseEntity<Resource> downloadRecordingFile(@RequestParam String name) {
+        try {
+            Path filePath = rknnService.resolveRecordingFile(name);
+            Resource resource = new FileSystemResource(filePath);
+            String encodedName = URLEncoder.encode(filePath.getFileName().toString(), StandardCharsets.UTF_8)
+                .replace("+", "%20");
+
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodedName)
+                .contentType(MediaType.parseMediaType("video/mp4"))
+                .body(resource);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest()
+                .contentType(MediaType.TEXT_PLAIN)
+                .body(new org.springframework.core.io.ByteArrayResource(e.getMessage().getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchFileException e) {
+            return ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            log.error("下载录像文件失败: name={}", name, e);
+            return ResponseEntity.internalServerError().build();
         }
     }
 

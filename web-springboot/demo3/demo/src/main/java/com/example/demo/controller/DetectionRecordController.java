@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -32,6 +33,7 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 
 @Slf4j
@@ -151,6 +153,30 @@ public class DetectionRecordController {
         record.setIsProcessed(processed != null && processed == 1);
         record.setProcessedTime(LocalDateTime.now());
         detectionRecordRepository.save(record);
+        return Result.success(true);
+    }
+
+    @DeleteMapping("/{id}")
+    public Result<Boolean> delete(@PathVariable Long id) {
+        if (!detectionRecordRepository.existsById(id)) {
+            return Result.error(404, "记录不存在");
+        }
+        detectionRecordRepository.deleteById(id);
+        return Result.success(true);
+    }
+
+    @DeleteMapping("/batch")
+    public Result<Boolean> batchDelete(@RequestBody List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Result.error(400, "请选择要删除的记录");
+        }
+        detectionRecordRepository.deleteAllById(ids);
+        return Result.success(true);
+    }
+
+    @DeleteMapping("/clear-all")
+    public Result<Boolean> clearAll() {
+        detectionRecordRepository.deleteAllInBatch();
         return Result.success(true);
     }
 

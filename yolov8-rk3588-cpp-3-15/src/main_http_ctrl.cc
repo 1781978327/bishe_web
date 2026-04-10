@@ -5,10 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -68,6 +70,8 @@
 #define DEFAULT_LABEL_REL_PATH "model/coco_80_labels_list.txt"
 #define DEFAULT_MEDIAMTX_REL_PATH "src/mediamtx"
 #define DEFAULT_MEDIAMTX_LOG "/tmp/mediamtx_auto.log"
+#define DEFAULT_RECORD_OUTPUT_REL_PATH "recordings/camera"
+#define DEFAULT_FFMPEG_BIN "/usr/local/ffmpeg/bin/ffmpeg"
 #define DEFAULT_WIDTH     640
 #define DEFAULT_HEIGHT    640
 #define SLOTS_PER_CAM     3  // 每摄像头 3 个 slot
@@ -86,6 +90,21 @@ bool g_input_source_cam1_dmabuf = false;
 std::string g_mediamtx_bin;
 std::string g_mediamtx_log = DEFAULT_MEDIAMTX_LOG;
 bool g_mediamtx_auto_start = true;
+std::string g_record_output_dir;
+std::string g_ffmpeg_bin = DEFAULT_FFMPEG_BIN;
+
+struct CameraRecordingState {
+    pid_t pid = -1;
+    bool active = false;
+    bool stop_requested = false;
+    std::string output_path;
+    std::string log_path;
+    std::string started_at;
+    std::string last_error;
+};
+
+std::mutex g_record_mutex;
+CameraRecordingState g_record_states[2];
 
 // ---------------------- 全局状态 ----------------------
 std::atomic<bool> g_running(true);
@@ -720,6 +739,59 @@ std::string default_mediamtx_binary_path() {
     return DEFAULT_MEDIAMTX_REL_PATH;
 }
 
+bool is_executable_file(const std::string& path);
+
+std::string default_record_output_dir() {
+    std::string root = detect_project_root();
+    if (!root.empty()) {
+        return path_join(root, DEFAULT_RECORD_OUTPUT_REL_PATH);
+    }
+    return DEFAULT_RECORD_OUTPUT_REL_PATH;
+}
+
+std::string find_executable_in_path(const std::string& name) {
+    if (name.empty()) return "";
+    if (name.find('/') != std::string::npos) {
+        return is_executable_file(name) ? name : "";
+    }
+
+    const char* env_path = getenv("PATH");
+    if (!env_path || !*env_path) return "";
+    std::string path_env = env_path;
+    size_t start = 0;
+    while (start <= path_env.size()) {
+        size_t end = path_env.find(':', start);
+        std::string dir = path_env.substr(start, end == std::string::npos ? std::string::npos : (end - start));
+        if (dir.empty()) dir = ".";
+        std::string candidate = path_join(dir, name);
+        if (is_executable_file(candidate)) {
+            return candidate;
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return "";
+}
+
+std::string resolve_ffmpeg_binary_path() {
+    std::vector<std::string> candidates;
+    candidates.reserve(4);
+    if (!g_ffmpeg_bin.empty()) candidates.push_back(g_ffmpeg_bin);
+    candidates.push_back(DEFAULT_FFMPEG_BIN);
+    candidates.push_back("ffmpeg");
+
+    for (const auto& candidate : candidates) {
+        if (candidate.empty()) continue;
+        if (candidate.find('/') != std::string::npos) {
+            if (is_executable_file(candidate)) return candidate;
+        } else {
+            std::string resolved = find_executable_in_path(candidate);
+            if (!resolved.empty()) return resolved;
+        }
+    }
+    return "";
+}
+
 bool parse_bool_flag_text(const std::string& text, bool default_value) {
     if (text.empty()) return default_value;
     std::string v = text;
@@ -1208,6 +1280,433 @@ std::string local_time_iso8601() {
     char buf[64];
     strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm_local);
     return std::string(buf);
+}
+
+bool ensure_directory_tree(const std::string& path) {
+    if (path.empty()) return false;
+    if (directory_exists(path)) return true;
+
+    std::string normalized = path;
+    while (normalized.size() > 1 && normalized[normalized.size() - 1] == '/') {
+        normalized.resize(normalized.size() - 1);
+    }
+
+    std::string current;
+    size_t start = 0;
+    if (!normalized.empty() && normalized[0] == '/') {
+        current = "/";
+        start = 1;
+    }
+
+    while (start <= normalized.size()) {
+        size_t end = normalized.find('/', start);
+        std::string part = normalized.substr(start, end == std::string::npos ? std::string::npos : (end - start));
+        if (!part.empty()) {
+            if (!current.empty() && current != "/") current += "/";
+            current += part;
+            if (!directory_exists(current)) {
+                if (mkdir(current.c_str(), 0755) != 0 && errno != EEXIST) {
+                    return false;
+                }
+            }
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return directory_exists(normalized);
+}
+
+std::string sanitize_filename_component(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        unsigned char c = (unsigned char)text[i];
+        if (std::isalnum(c) || c == '_' || c == '-' || c == '.') {
+            out.push_back((char)c);
+        } else {
+            out.push_back('_');
+        }
+    }
+    while (!out.empty() && out[0] == '.') out.erase(out.begin());
+    while (!out.empty() && out[out.size() - 1] == '.') out.resize(out.size() - 1);
+    return out;
+}
+
+std::string compact_timestamp_for_filename() {
+    std::time_t now = std::time(nullptr);
+    std::tm tm_local;
+    localtime_r(&now, &tm_local);
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm_local);
+    return std::string(buf);
+}
+
+std::string record_camera_name(int cam) {
+    return cam == 0 ? "cam0" : "cam1";
+}
+
+int parse_record_camera_index(const std::string& path) {
+    std::string cam_text = parse_query_param(path, "cam");
+    if (cam_text.empty()) cam_text = parse_query_param(path, "camera");
+    if (!cam_text.empty()) {
+        if (cam_text == "0" || cam_text == "cam0") return 0;
+        if (cam_text == "1" || cam_text == "cam1") return 1;
+    }
+
+    std::string camera_id_text = parse_query_param(path, "cameraId");
+    if (!camera_id_text.empty()) {
+        char* endptr = nullptr;
+        long camera_id = strtol(camera_id_text.c_str(), &endptr, 10);
+        if (endptr != camera_id_text.c_str() && *endptr == '\0') {
+            if (camera_id == 1) return 0;
+            if (camera_id == 2) return 1;
+        }
+    }
+    return -1;
+}
+
+std::string recording_rtsp_url_for_camera(int cam) {
+    return cam == 0 ? g_rtsp_url_0 : g_rtsp_url_1;
+}
+
+void refresh_recording_state_locked(int cam) {
+    if (cam < 0 || cam > 1) return;
+    CameraRecordingState& state = g_record_states[cam];
+    if (state.pid <= 0) {
+        state.active = false;
+        state.pid = -1;
+        return;
+    }
+
+    int status = 0;
+    pid_t rc = waitpid(state.pid, &status, WNOHANG);
+    if (rc == 0) {
+        state.active = true;
+        return;
+    }
+
+    if (rc == state.pid) {
+        state.active = false;
+        state.pid = -1;
+        if (state.stop_requested) {
+            state.last_error.clear();
+        } else if (WIFEXITED(status)) {
+            int code = WEXITSTATUS(status);
+            if (code == 0) {
+                state.last_error.clear();
+            } else {
+                state.last_error = "ffmpeg 退出码 " + std::to_string(code);
+            }
+        } else if (WIFSIGNALED(status)) {
+            int sig = WTERMSIG(status);
+            if (sig == SIGINT || sig == SIGTERM) {
+                state.last_error.clear();
+            } else {
+                state.last_error = "ffmpeg 被信号终止: " + std::to_string(sig);
+            }
+        } else {
+            state.last_error = "ffmpeg 已结束";
+        }
+        state.stop_requested = false;
+        return;
+    }
+
+    if (rc < 0 && errno == ECHILD) {
+        state.active = false;
+        state.pid = -1;
+        if (state.stop_requested) {
+            state.last_error.clear();
+        } else if (state.last_error.empty()) {
+            state.last_error = "录像进程已结束";
+        }
+        state.stop_requested = false;
+    }
+}
+
+void refresh_all_recording_states() {
+    std::lock_guard<std::mutex> lock(g_record_mutex);
+    refresh_recording_state_locked(0);
+    refresh_recording_state_locked(1);
+}
+
+std::string build_recording_filename(int cam, const std::string& requested_name) {
+    std::string base = sanitize_filename_component(trim_copy(requested_name));
+    if (base.empty()) {
+        base = record_camera_name(cam) + "_" + compact_timestamp_for_filename();
+    }
+    const std::string suffix = ".mp4";
+    if (base.size() < suffix.size() ||
+        base.substr(base.size() - suffix.size()) != suffix) {
+        base += suffix;
+    }
+    return base;
+}
+
+bool ensure_camera_rtsp_ready_for_recording(int cam, std::string* detail) {
+#ifdef USE_RTSP_MPP
+    if (detail) detail->clear();
+    if (cam < 0 || cam > 1) {
+        if (detail) *detail = "无效的摄像头编号";
+        return false;
+    }
+
+    std::string mediamtx_detail;
+    (void)start_mediamtx_if_needed("/api/record/start", &mediamtx_detail);
+
+    std::lock_guard<std::mutex> lock(g_rtsp_mutex);
+    if (g_video_mode.load()) {
+        if (detail) *detail = "当前处于视频文件模式，无法录制摄像头";
+        return false;
+    }
+
+    bool cam0_ok = (g_rtsp_sender0 != nullptr && g_rtsp_sender0->inited());
+    bool cam1_ok = (g_rtsp_sender1 != nullptr && g_rtsp_sender1->inited());
+    if (!cam0_ok || !cam1_ok) {
+        if (!g_rtsp_streaming.load()) {
+            stop_rtsp_senders_locked();
+        }
+        if (!cam0_ok) {
+            if (g_rtsp_sender0) {
+                delete g_rtsp_sender0;
+                g_rtsp_sender0 = nullptr;
+            }
+            g_rtsp_sender0 = new RtspMppSender();
+            if (!g_rtsp_sender0->init(g_rtsp_url_0.c_str(), 640, 480, 30)) {
+                delete g_rtsp_sender0;
+                g_rtsp_sender0 = nullptr;
+                printf("[Record] Cam0 RTSP 启动失败: %s\n", g_rtsp_url_0.c_str());
+            } else {
+                cam0_ok = true;
+                printf("[Record] Cam0 RTSP 已为录像启动\n");
+            }
+        }
+        if (!cam1_ok) {
+            if (g_rtsp_sender1) {
+                delete g_rtsp_sender1;
+                g_rtsp_sender1 = nullptr;
+            }
+            g_rtsp_sender1 = new RtspMppSender();
+            if (!g_rtsp_sender1->init(g_rtsp_url_1.c_str(), 640, 480, 30)) {
+                delete g_rtsp_sender1;
+                g_rtsp_sender1 = nullptr;
+                printf("[Record] Cam1 RTSP 启动失败: %s\n", g_rtsp_url_1.c_str());
+            } else {
+                cam1_ok = true;
+                printf("[Record] Cam1 RTSP 已为录像启动\n");
+            }
+        }
+        if (!cam0_ok && !cam1_ok) {
+            g_rtsp_streaming = false;
+            if (detail) *detail = "无法为录像启动 RTSP 推流";
+            return false;
+        }
+    }
+
+    g_rtsp_streaming = true;
+    bool requested_ok = (cam == 0) ? cam0_ok : cam1_ok;
+    if (!requested_ok) {
+        if (detail) *detail = "目标摄像头 RTSP 未就绪";
+        return false;
+    }
+    if (detail) *detail = "ready";
+    return true;
+#else
+    (void)cam;
+    if (detail) *detail = "当前构建未启用 USE_RTSP_MPP，无法录像";
+    return false;
+#endif
+}
+
+bool start_camera_recording(int cam, const std::string& requested_name,
+                            std::string* out_message, int* out_status_code) {
+    if (out_message) out_message->clear();
+    if (out_status_code) *out_status_code = 200;
+
+    if (cam < 0 || cam > 1) {
+        if (out_message) *out_message = "无效的 cam 参数，支持 0 或 1";
+        if (out_status_code) *out_status_code = 400;
+        return false;
+    }
+
+    std::string rtsp_detail;
+    if (!ensure_camera_rtsp_ready_for_recording(cam, &rtsp_detail)) {
+        if (out_message) *out_message = rtsp_detail.empty() ? "录像前 RTSP 未就绪" : rtsp_detail;
+        if (out_status_code) *out_status_code = 409;
+        return false;
+    }
+
+    std::string ffmpeg_bin = resolve_ffmpeg_binary_path();
+    if (ffmpeg_bin.empty()) {
+        if (out_message) *out_message = "未找到可执行的 ffmpeg";
+        if (out_status_code) *out_status_code = 500;
+        return false;
+    }
+
+    std::string output_dir = g_record_output_dir.empty() ? default_record_output_dir() : g_record_output_dir;
+    if (!ensure_directory_tree(output_dir)) {
+        if (out_message) *out_message = "无法创建录像输出目录: " + output_dir;
+        if (out_status_code) *out_status_code = 500;
+        return false;
+    }
+
+    std::string filename = build_recording_filename(cam, requested_name);
+    std::string output_path = path_join(output_dir, filename);
+    std::string log_path = output_path + ".log";
+    std::string rtsp_url = recording_rtsp_url_for_camera(cam);
+
+    {
+        std::lock_guard<std::mutex> lock(g_record_mutex);
+        refresh_recording_state_locked(cam);
+        if (g_record_states[cam].active) {
+            if (out_message) {
+                *out_message = record_camera_name(cam) + " 已在录制: " + g_record_states[cam].output_path;
+            }
+            if (out_status_code) *out_status_code = 409;
+            return false;
+        }
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        if (out_message) *out_message = std::string("fork 失败: ") + strerror(errno);
+        if (out_status_code) *out_status_code = 500;
+        return false;
+    }
+
+    if (pid == 0) {
+        int stdin_fd = open("/dev/null", O_RDONLY);
+        if (stdin_fd >= 0) {
+            dup2(stdin_fd, STDIN_FILENO);
+            close(stdin_fd);
+        }
+
+        int log_fd = open(log_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (log_fd >= 0) {
+            dup2(log_fd, STDOUT_FILENO);
+            dup2(log_fd, STDERR_FILENO);
+            close(log_fd);
+        }
+
+        execlp(ffmpeg_bin.c_str(),
+               ffmpeg_bin.c_str(),
+               "-nostdin",
+               "-y",
+               "-rtsp_transport", "tcp",
+               "-i", rtsp_url.c_str(),
+               "-c", "copy",
+               "-movflags", "+faststart",
+               output_path.c_str(),
+               (char*)nullptr);
+        _exit(127);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_record_mutex);
+        CameraRecordingState& state = g_record_states[cam];
+        state.pid = pid;
+        state.active = true;
+        state.stop_requested = false;
+        state.output_path = output_path;
+        state.log_path = log_path;
+        state.started_at = local_time_iso8601();
+        state.last_error.clear();
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    {
+        std::lock_guard<std::mutex> lock(g_record_mutex);
+        refresh_recording_state_locked(cam);
+        if (!g_record_states[cam].active) {
+            if (out_message) {
+                *out_message = g_record_states[cam].last_error.empty()
+                                   ? ("录像启动失败，请查看日志: " + log_path)
+                                   : (g_record_states[cam].last_error + "，日志: " + log_path);
+            }
+            if (out_status_code) *out_status_code = 500;
+            return false;
+        }
+    }
+
+    if (out_message) {
+        *out_message = record_camera_name(cam) + " 开始录像: " + output_path;
+    }
+    return true;
+}
+
+bool stop_camera_recording(int cam, std::string* out_message, int* out_status_code) {
+    if (out_message) out_message->clear();
+    if (out_status_code) *out_status_code = 200;
+
+    if (cam < 0 || cam > 1) {
+        if (out_message) *out_message = "无效的 cam 参数，支持 0 或 1";
+        if (out_status_code) *out_status_code = 400;
+        return false;
+    }
+
+    pid_t pid = -1;
+    {
+        std::lock_guard<std::mutex> lock(g_record_mutex);
+        refresh_recording_state_locked(cam);
+        CameraRecordingState& state = g_record_states[cam];
+        if (!state.active || state.pid <= 0) {
+            if (out_message) *out_message = record_camera_name(cam) + " 当前未在录制";
+            return true;
+        }
+        state.stop_requested = true;
+        pid = state.pid;
+    }
+
+    if (kill(pid, SIGINT) != 0 && errno != ESRCH) {
+        if (out_message) *out_message = std::string("停止录像失败: ") + strerror(errno);
+        if (out_status_code) *out_status_code = 500;
+        return false;
+    }
+
+    for (int i = 0; i < 30; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::lock_guard<std::mutex> lock(g_record_mutex);
+        refresh_recording_state_locked(cam);
+        if (!g_record_states[cam].active) {
+            if (out_message) *out_message = record_camera_name(cam) + " 已停止录像";
+            return true;
+        }
+    }
+
+    if (kill(pid, SIGTERM) == 0 || errno == ESRCH) {
+        for (int i = 0; i < 20; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::lock_guard<std::mutex> lock(g_record_mutex);
+            refresh_recording_state_locked(cam);
+            if (!g_record_states[cam].active) {
+                if (out_message) *out_message = record_camera_name(cam) + " 已停止录像";
+                return true;
+            }
+        }
+    }
+
+    if (kill(pid, SIGKILL) == 0 || errno == ESRCH) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_record_mutex);
+        refresh_recording_state_locked(cam);
+        if (!g_record_states[cam].active) {
+            if (out_message) *out_message = record_camera_name(cam) + " 已强制停止录像";
+            return true;
+        }
+    }
+
+    if (out_message) *out_message = record_camera_name(cam) + " 停止录像超时";
+    if (out_status_code) *out_status_code = 500;
+    return false;
+}
+
+void stop_all_recordings() {
+    for (int cam = 0; cam < 2; ++cam) {
+        std::string ignore_msg;
+        int ignore_status = 200;
+        (void)stop_camera_recording(cam, &ignore_msg, &ignore_status);
+    }
 }
 
 void update_latest_frame_global(const cv::Mat& frame, int slot) {
@@ -2442,6 +2941,8 @@ void handle_client(int client_fd) {
         int tracker_skip_frames = rknn_lite::get_deepsort_skip_frames();
         bool forbidden_cam0_loaded = false;
         bool forbidden_cam1_loaded = false;
+        CameraRecordingState record_cam0;
+        CameraRecordingState record_cam1;
         {
             std::lock_guard<std::mutex> lock(g_model_mutex);
             model_path = g_model_path;
@@ -2452,6 +2953,13 @@ void handle_client(int client_fd) {
             std::lock_guard<std::mutex> lock(g_forbidden_area_mutex);
             forbidden_cam0_loaded = g_forbidden_area_cache[0].valid;
             forbidden_cam1_loaded = g_forbidden_area_cache[1].valid;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_record_mutex);
+            refresh_recording_state_locked(0);
+            refresh_recording_state_locked(1);
+            record_cam0 = g_record_states[0];
+            record_cam1 = g_record_states[1];
         }
         std::string active_label_path = label_path.empty() ? default_label_path() : label_path;
         std::ostringstream oss;
@@ -2475,6 +2983,18 @@ void handle_client(int client_fd) {
         oss << "\"mediamtx_bin\":\"" << json_escape(g_mediamtx_bin) << "\",";
         oss << "\"mediamtx_log\":\"" << json_escape(g_mediamtx_log) << "\",";
         oss << "\"mediamtx_running\":" << (mediamtx_running ? "true" : "false") << ",";
+        oss << "\"record_output_dir\":\"" << json_escape(g_record_output_dir) << "\",";
+        oss << "\"record_ffmpeg_bin\":\"" << json_escape(g_ffmpeg_bin) << "\",";
+        oss << "\"recording_cam0\":" << (record_cam0.active ? "true" : "false") << ",";
+        oss << "\"recording_cam1\":" << (record_cam1.active ? "true" : "false") << ",";
+        oss << "\"recording_cam0_file\":\"" << json_escape(record_cam0.output_path) << "\",";
+        oss << "\"recording_cam1_file\":\"" << json_escape(record_cam1.output_path) << "\",";
+        oss << "\"recording_cam0_log\":\"" << json_escape(record_cam0.log_path) << "\",";
+        oss << "\"recording_cam1_log\":\"" << json_escape(record_cam1.log_path) << "\",";
+        oss << "\"recording_cam0_started_at\":\"" << json_escape(record_cam0.started_at) << "\",";
+        oss << "\"recording_cam1_started_at\":\"" << json_escape(record_cam1.started_at) << "\",";
+        oss << "\"recording_cam0_error\":\"" << json_escape(record_cam0.last_error) << "\",";
+        oss << "\"recording_cam1_error\":\"" << json_escape(record_cam1.last_error) << "\",";
         oss << "\"model_error\":\"" << json_escape(model_error) << "\",";
         oss << "\"current_camera\":" << g_current_cam.load() << ",";
         oss << "\"fps\":" << (g_cam0_fps.load() + g_cam1_fps.load()) << ",";
@@ -3154,6 +3674,81 @@ void handle_client(int client_fd) {
         send_response(client_fd, build_json_response("success", "RTSP 推流已停止"), "application/json");
     }
 #endif
+    else if (route == "/api/record/status" && method == "GET") {
+        CameraRecordingState record_cam0;
+        CameraRecordingState record_cam1;
+        {
+            std::lock_guard<std::mutex> lock(g_record_mutex);
+            refresh_recording_state_locked(0);
+            refresh_recording_state_locked(1);
+            record_cam0 = g_record_states[0];
+            record_cam1 = g_record_states[1];
+        }
+        std::ostringstream oss;
+        oss << "{";
+        oss << "\"record_output_dir\":\"" << json_escape(g_record_output_dir) << "\",";
+        oss << "\"record_ffmpeg_bin\":\"" << json_escape(g_ffmpeg_bin) << "\",";
+        oss << "\"cam0\":{";
+        oss << "\"recording\":" << (record_cam0.active ? "true" : "false") << ",";
+        oss << "\"file\":\"" << json_escape(record_cam0.output_path) << "\",";
+        oss << "\"log\":\"" << json_escape(record_cam0.log_path) << "\",";
+        oss << "\"started_at\":\"" << json_escape(record_cam0.started_at) << "\",";
+        oss << "\"error\":\"" << json_escape(record_cam0.last_error) << "\"";
+        oss << "},";
+        oss << "\"cam1\":{";
+        oss << "\"recording\":" << (record_cam1.active ? "true" : "false") << ",";
+        oss << "\"file\":\"" << json_escape(record_cam1.output_path) << "\",";
+        oss << "\"log\":\"" << json_escape(record_cam1.log_path) << "\",";
+        oss << "\"started_at\":\"" << json_escape(record_cam1.started_at) << "\",";
+        oss << "\"error\":\"" << json_escape(record_cam1.last_error) << "\"";
+        oss << "}";
+        oss << "}";
+        send_response(client_fd, oss.str(), "application/json");
+    }
+    else if (route == "/api/record/start" && method == "POST") {
+        int cam = parse_record_camera_index(path);
+        if (cam < 0) {
+            send_response(client_fd,
+                          build_json_response("error", "缺少或无效的 cam 参数，请使用 /api/record/start?cam=0 或 cam=1"),
+                          "application/json", 400);
+            return;
+        }
+        std::string requested_name = parse_query_param(path, "name");
+        std::string message;
+        int status_code = 200;
+        if (!start_camera_recording(cam, requested_name, &message, &status_code)) {
+            send_response(client_fd, build_json_response("error", message), "application/json", status_code);
+            return;
+        }
+        send_response(client_fd, build_json_response("success", message), "application/json");
+    }
+    else if (route == "/api/record/stop" && method == "POST") {
+        int cam = parse_record_camera_index(path);
+        if (cam < 0) {
+            std::string msg0;
+            std::string msg1;
+            int status0 = 200;
+            int status1 = 200;
+            bool ok0 = stop_camera_recording(0, &msg0, &status0);
+            bool ok1 = stop_camera_recording(1, &msg1, &status1);
+            if (!ok0 || !ok1) {
+                std::string combined = "停止录像结果: cam0=" + msg0 + ", cam1=" + msg1;
+                send_response(client_fd, build_json_response("error", combined), "application/json", 500);
+                return;
+            }
+            send_response(client_fd,
+                          build_json_response("success", "已停止所有摄像头录像"),
+                          "application/json");
+            return;
+        }
+        std::string message;
+        int status_code = 200;
+        if (!stop_camera_recording(cam, &message, &status_code)) {
+            send_response(client_fd, build_json_response("error", message), "application/json", status_code);
+            return;
+        }
+        send_response(client_fd, build_json_response("success", message), "application/json");
+    }
     else if (route == "/api/video/status" && method == "GET") {
         std::ostringstream oss;
         oss << "{";
@@ -3300,6 +3895,8 @@ int main(int argc, char** argv) {
     const char* env_mediamtx_bin = getenv("MEDIAMTX_BIN");
     const char* env_mediamtx_log = getenv("MEDIAMTX_LOG");
     const char* env_mediamtx_auto = getenv("MEDIAMTX_AUTO_START");
+    const char* env_ffmpeg_bin = getenv("FFMPEG_BIN");
+    const char* env_record_output_dir = getenv("RECORD_OUTPUT_DIR");
     const char* env_cam0_source = getenv("CAM0_SOURCE");
     const char* env_cam1_source = getenv("CAM1_SOURCE");
     const char* env_tracker_backend = getenv("TRACKER_BACKEND");
@@ -3335,6 +3932,12 @@ int main(int argc, char** argv) {
     }
     if (env_mediamtx_auto && *env_mediamtx_auto) {
         g_mediamtx_auto_start = parse_bool_flag_text(env_mediamtx_auto, true);
+    }
+    if (env_ffmpeg_bin && *env_ffmpeg_bin) {
+        g_ffmpeg_bin = env_ffmpeg_bin;
+    }
+    if (env_record_output_dir && *env_record_output_dir) {
+        g_record_output_dir = env_record_output_dir;
     }
     if (env_cam0_source && *env_cam0_source) {
         g_input_source_cam0 = env_cam0_source;
@@ -3412,6 +4015,10 @@ int main(int argc, char** argv) {
             g_mediamtx_log = argv[++i];
         } else if (arg == "--mediamtx-auto-start" && i + 1 < argc) {
             g_mediamtx_auto_start = parse_bool_flag_text(argv[++i], true);
+        } else if (arg == "--ffmpeg-bin" && i + 1 < argc) {
+            g_ffmpeg_bin = argv[++i];
+        } else if (arg == "--record-output-dir" && i + 1 < argc) {
+            g_record_output_dir = argv[++i];
         } else if (arg == "--cam0-source" && i + 1 < argc) {
             g_input_source_cam0 = argv[++i];
             cam0_source_user_set = true;
@@ -3431,6 +4038,13 @@ int main(int argc, char** argv) {
     if (g_mediamtx_bin.empty()) {
         g_mediamtx_bin = default_mediamtx_binary_path();
     }
+    if (g_record_output_dir.empty()) {
+        g_record_output_dir = default_record_output_dir();
+    }
+    std::string resolved_ffmpeg_bin = resolve_ffmpeg_binary_path();
+    if (!resolved_ffmpeg_bin.empty()) {
+        g_ffmpeg_bin = resolved_ffmpeg_bin;
+    }
 
     refresh_rtsp_urls();
     print_banner();
@@ -3443,6 +4057,9 @@ int main(int argc, char** argv) {
            g_mediamtx_auto_start ? "开启" : "关闭",
            g_mediamtx_bin.c_str(),
            g_mediamtx_log.c_str());
+    printf("[Record] 输出目录: %s | ffmpeg=%s\n",
+           g_record_output_dir.c_str(),
+           g_ffmpeg_bin.c_str());
     printf("[Input] Cam0 输入源: %s\n", g_input_source_cam0.c_str());
     printf("[Input] Cam1 输入源: %s\n", g_input_source_cam1.c_str());
     printf("[Tracker] 默认算法: %s | ReID: %s\n",
@@ -4101,6 +4718,8 @@ int main(int argc, char** argv) {
     if (usage_thread.joinable()) {
         usage_thread.join();
     }
+
+    stop_all_recordings();
 
     std::string unload_msg;
     if (g_model_loaded.load() || g_active_jobs.load() > 0) {

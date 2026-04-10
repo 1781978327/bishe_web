@@ -24,3 +24,18 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 - 模型管理已支持两类来源：
   - 内置模型：`yolov8s`、`yolov8n`
   - 用户上传模型：`.rknn + 对应 .txt`
+- 录像代理接口已支持：
+  - `GET /api/rknn/record/status`
+  - `POST /api/rknn/record/start?cameraId=1|2`
+  - `POST /api/rknn/record/stop?cameraId=1|2`
+  - `GET /api/rknn/record/files?cameraId=1|2`
+  - `GET /api/rknn/record/file?name=xxx.mp4`
+- 检测记录删除接口已支持：
+  - `DELETE /api/detection/record/{id}`
+  - `DELETE /api/detection/record/batch`
+  - `DELETE /api/detection/record/clear-all`
+
+联调提示：
+
+- 如果前端录像文件弹窗返回 `404`，优先确认 Spring Boot 是否已经重启到最新代码。
+- 如果删除检测记录返回 `405 Method Not Allowed`，同样优先检查后端是否还是旧进程。

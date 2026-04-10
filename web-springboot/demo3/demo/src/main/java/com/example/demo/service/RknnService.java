@@ -12,7 +12,13 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import jakarta.annotation.PostConstruct;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -310,6 +316,194 @@ public class RknnService {
             log.error("停止推流失败: {}", e.getMessage());
             return Map.of("success", false, "error", e.getMessage());
         }
+    }
+
+    // ==================== 摄像头录像控制 ====================
+
+    public Map<String, Object> getRecordingStatus() {
+        try {
+            String url = getApiUrl("/api/record/status");
+            ResponseEntity<Map> response = rknnServerRestTemplate.getForEntity(url, Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                return response.getBody();
+            }
+            return Map.of("success", false, "error", "获取录像状态失败");
+        } catch (RestClientException e) {
+            log.error("获取录像状态失败: {}", e.getMessage());
+            return Map.of("success", false, "error", e.getMessage());
+        }
+    }
+
+    public Map<String, Object> startCameraRecording(Integer cameraId, String name) {
+        try {
+            int cam = normalizeRecordingCameraId(cameraId);
+            UriComponentsBuilder builder = UriComponentsBuilder
+                    .fromHttpUrl(getApiUrl("/api/record/start"))
+                    .queryParam("cam", cam);
+            if (name != null && !name.trim().isEmpty()) {
+                builder.queryParam("name", name.trim());
+            }
+
+            ResponseEntity<Map> response = rknnServerRestTemplate.postForEntity(
+                    builder.build().encode().toUriString(),
+                    null,
+                    Map.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                log.info("摄像头录像已开启: cameraId={}, cam={}, name={}", cameraId, cam, name);
+                return response.getBody();
+            }
+            return Map.of("success", false, "error", "HTTP " + response.getStatusCode());
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (RestClientException e) {
+            log.error("开启摄像头录像失败: {}", e.getMessage());
+            return Map.of("success", false, "error", e.getMessage());
+        }
+    }
+
+    public Map<String, Object> stopCameraRecording(Integer cameraId) {
+        try {
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(getApiUrl("/api/record/stop"));
+            if (cameraId != null) {
+                builder.queryParam("cam", normalizeRecordingCameraId(cameraId));
+            }
+
+            ResponseEntity<Map> response = rknnServerRestTemplate.postForEntity(
+                    builder.build().encode().toUriString(),
+                    null,
+                    Map.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                log.info("摄像头录像已停止: cameraId={}", cameraId);
+                return response.getBody();
+            }
+            return Map.of("success", false, "error", "HTTP " + response.getStatusCode());
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (RestClientException e) {
+            log.error("停止摄像头录像失败: {}", e.getMessage());
+            return Map.of("success", false, "error", e.getMessage());
+        }
+    }
+
+    public Map<String, Object> listRecordingFiles(Integer cameraId) {
+        try {
+            Path outputDir = resolveRecordingOutputDir();
+            String prefix = resolveRecordingFilePrefix(cameraId);
+            List<Map<String, Object>> files = new ArrayList<>();
+
+            try (var stream = Files.list(outputDir)) {
+                stream.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".mp4"))
+                    .filter(path -> prefix.isEmpty() || path.getFileName().toString().startsWith(prefix))
+                    .sorted(Comparator.comparingLong(this::safeLastModifiedTime).reversed())
+                    .forEach(path -> files.add(buildRecordingFileInfo(path)));
+            }
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("recordOutputDir", outputDir.toString());
+            result.put("files", files);
+            return result;
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("获取录像文件列表失败: {}", e.getMessage());
+            return Map.of("success", false, "error", e.getMessage());
+        }
+    }
+
+    public Path resolveRecordingFile(String fileName) throws IOException {
+        if (fileName == null || fileName.isBlank()) {
+            throw new IllegalArgumentException("文件名不能为空");
+        }
+        if (fileName.contains("/") || fileName.contains("\\") || !fileName.toLowerCase(Locale.ROOT).endsWith(".mp4")) {
+            throw new IllegalArgumentException("仅支持下载 mp4 录像文件");
+        }
+
+        Path outputDir = resolveRecordingOutputDir();
+        Path filePath = outputDir.resolve(fileName).normalize();
+        if (!filePath.startsWith(outputDir)) {
+            throw new IllegalArgumentException("非法文件路径");
+        }
+        if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
+            throw new NoSuchFileException(fileName);
+        }
+        return filePath;
+    }
+
+    private int normalizeRecordingCameraId(Integer cameraId) {
+        if (cameraId == null) {
+            throw new IllegalArgumentException("cameraId 不能为空");
+        }
+        if (cameraId == 1) return 0;
+        if (cameraId == 2) return 1;
+        throw new IllegalArgumentException("cameraId 仅支持 1 或 2");
+    }
+
+    private Path resolveRecordingOutputDir() throws IOException {
+        Map<String, Object> status = getRecordingStatus();
+        if (Boolean.FALSE.equals(status.get("success"))) {
+            throw new IllegalStateException(String.valueOf(status.getOrDefault("error", "获取录像目录失败")));
+        }
+
+        Object rawDir = status.get("record_output_dir");
+        String dirText = rawDir instanceof String ? (String) rawDir : "";
+        if (dirText.isBlank()) {
+            rawDir = status.get("recordOutputDir");
+            if (!(rawDir instanceof String fallbackDir) || fallbackDir.isBlank()) {
+                throw new IllegalStateException("视觉服务未返回录像目录");
+            }
+            dirText = fallbackDir;
+        }
+
+        Path outputDir = Paths.get(dirText).normalize();
+        if (!Files.exists(outputDir) || !Files.isDirectory(outputDir)) {
+            throw new IllegalStateException("录像目录不存在: " + outputDir);
+        }
+        return outputDir;
+    }
+
+    private String resolveRecordingFilePrefix(Integer cameraId) {
+        if (cameraId == null) {
+            return "";
+        }
+        int cam = normalizeRecordingCameraId(cameraId);
+        return cam == 0 ? "cam0_" : "cam1_";
+    }
+
+    private long safeLastModifiedTime(Path path) {
+        try {
+            return Files.getLastModifiedTime(path).toMillis();
+        } catch (IOException e) {
+            return Long.MIN_VALUE;
+        }
+    }
+
+    private Map<String, Object> buildRecordingFileInfo(Path path) {
+        String name = path.getFileName().toString();
+        int cameraId = name.startsWith("cam1_") ? 2 : 1;
+        String cameraKey = cameraId == 1 ? "cam0" : "cam1";
+        long size = 0L;
+        String modifiedAt = "";
+        try {
+            size = Files.size(path);
+            modifiedAt = Files.getLastModifiedTime(path).toInstant().toString();
+        } catch (IOException e) {
+            log.warn("读取录像文件元信息失败: file={}, err={}", path, e.getMessage());
+        }
+
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("name", name);
+        item.put("cameraId", cameraId);
+        item.put("cameraKey", cameraKey);
+        item.put("size", size);
+        item.put("modifiedAt", modifiedAt);
+        item.put("downloadUrl", "/api/rknn/record/file?name=" + name);
+        return item;
     }
 
     // ==================== 视频文件控制 ====================

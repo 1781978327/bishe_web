@@ -1136,4 +1136,88 @@ GET /api/test/health
 
 ---
 
+## 十二、补充接口（2026-04 更新）
+
+### 12.1 录像代理接口 `/rknn`
+
+#### 获取录像状态
+
+```
+GET /rknn/record/status
+```
+
+返回视觉服务当前录像目录、`ffmpeg` 路径，以及 `cam0/cam1` 的录像状态。
+
+#### 开始录像
+
+```
+POST /rknn/record/start?cameraId=1
+POST /rknn/record/start?cameraId=2
+```
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| `cameraId` | int | 是 | `1 -> cam0`，`2 -> cam1` |
+| `name` | string | 否 | 自定义输出文件名 |
+
+#### 停止录像
+
+```
+POST /rknn/record/stop?cameraId=1
+```
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| `cameraId` | int | 否 | 不传时停止全部录像 |
+
+#### 获取录像文件列表
+
+```
+GET /rknn/record/files?cameraId=1
+```
+
+| 参数名 | 类型 | 必填 | 说明 |
+|--------|------|------|------|
+| `cameraId` | int | 否 | `1 -> cam0`，`2 -> cam1`，不传则返回全部 |
+
+#### 下载录像文件
+
+```
+GET /rknn/record/file?name=cam0_20260410_183910.mp4
+```
+
+说明：
+
+- 仅允许下载录像目录中的 `.mp4` 文件
+- 文件名不允许携带路径分隔符
+
+### 12.2 检测记录删除接口 `/detection/record`
+
+#### 删除单条记录
+
+```
+DELETE /detection/record/{id}
+```
+
+#### 批量删除记录
+
+```
+DELETE /detection/record/batch
+Content-Type: application/json
+```
+
+请求体示例：
+
+```json
+[101, 102, 103]
+```
+
+#### 清空全部记录
+
+```
+DELETE /detection/record/clear-all
+```
+
+---
+
 *文档生成时间：2026年4月*
