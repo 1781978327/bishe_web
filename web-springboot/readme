@@ -20,7 +20,7 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 
 补充说明：
 
-- `/api/rknn/status` 现在会根据当前请求主机，自动把返回结果中的 `rtsp_url_cam0/cam1/cam3` 从 `127.0.0.1` 改写成当前浏览器可访问的主机地址，更适合同一局域网下的前后端联调。
+- `/api/rknn/status` 现在会根据当前请求主机，自动把返回结果中的 `rtsp_url_cam0/cam1/cam2/cam3` 从 `127.0.0.1` 改写成当前浏览器可访问的主机地址，更适合同一局域网下的前后端联调。
 - 模型管理已支持两类来源：
   - 内置模型：`yolov8s`、`yolov8n`
   - 用户上传模型：`.rknn + 对应 .txt`
@@ -35,7 +35,17 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
   - `DELETE /api/detection/record/batch`
   - `DELETE /api/detection/record/clear-all`
 
+- 视觉状态接口现在会透出融合画面地址：
+  - `rtsp_url_mosaic`
+  - 对应 RTSP：`rtsp://<当前主机>:8554/cam2`
+
+- 前端监控页“检测状态”按钮现在不再依赖旧 WebSocket 状态探测，而是通过：
+  - 先调用 `/api/rknn/rtsp/camera/start`
+  - 再调用 `/api/rknn/status`
+  - 按视觉服务真实状态刷新 `cam0 / cam1 / cam2`
+
 联调提示：
 
 - 如果前端录像文件弹窗返回 `404`，优先确认 Spring Boot 是否已经重启到最新代码。
 - 如果删除检测记录返回 `405 Method Not Allowed`，同样优先检查后端是否还是旧进程。
+- 如果前端监控页看不到“融合画面 (cam2)”，优先确认前端和后端都已经重启到最新版本。

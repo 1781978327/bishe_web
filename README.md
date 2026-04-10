@@ -2,7 +2,7 @@
 
 基于 `Vue 3 + Spring Boot + RK3588 RKNN` 的一体化校园安全监测系统，当前整合了三条主线能力：
 
-- 视觉监控：双路摄像头推理、目标跟踪、禁入区、RTSP / WebRTC 播放、摄像头录像
+- 视觉监控：双路摄像头推理、目标跟踪、禁入区、RTSP / WebRTC 播放、摄像头录像、双路融合画面推流
 - 声音异常：声音分析服务与异常记录联动
 - 环境监测：温湿度、烟雾、光照等传感器读取与展示
 
@@ -118,6 +118,30 @@ curl -X POST "http://127.0.0.1:8080/api/rknn/inference/on?track=true&tracker=byt
 curl -X POST "http://127.0.0.1:8080/api/rknn/rtsp/camera/start"
 ```
 
+## 融合推流
+
+视觉服务现在除了原有三路 RTSP 外，还会额外输出一路双路拼接流：
+
+- `cam0`: `rtsp://<当前机器IP>:8554/cam0`
+- `cam1`: `rtsp://<当前机器IP>:8554/cam1`
+- `cam2`: `rtsp://<当前机器IP>:8554/cam2`
+- `cam3`: `rtsp://<当前机器IP>:8554/cam3`（视频文件模式）
+
+其中：
+
+- `cam2` 是 `cam0 + cam1` 左右拼接后的融合画面
+- 当前输出规格为 `H.264 1280x480 @ 30fps`
+- 融合画面用于浏览与展示，不参与当前的录像控制入口
+
+可用下面命令快速探测：
+
+```bash
+ffprobe -v error -rtsp_transport tcp \
+  -show_entries stream=codec_name,width,height,avg_frame_rate \
+  -of default=noprint_wrappers=1 \
+  rtsp://127.0.0.1:8554/cam2
+```
+
 ## 录像功能
 
 当前录像链路已经打通到三层：
@@ -185,9 +209,24 @@ curl -O -J "http://127.0.0.1:8080/api/rknn/record/file?name=cam0_20260410_183910
 - RTSP:
   - `rtsp://<当前机器IP>:8554/cam0`
   - `rtsp://<当前机器IP>:8554/cam1`
+  - `rtsp://<当前机器IP>:8554/cam2`
 - WebRTC(WHEP):
   - `http://<当前机器IP>:8889/cam0/whep`
   - `http://<当前机器IP>:8889/cam1/whep`
+
+## 实时监控页说明
+
+`/monitor` 页面现在默认会补齐三路视觉流：
+
+- `摄像头1 (cam0)`
+- `摄像头2 (cam1)`
+- `融合画面 (cam2)`
+
+页面行为补充：
+
+- “检测状态”按钮现在不再依赖旧 WebSocket 检测链，而是读取 `/api/rknn/status` 来同步视觉服务真实状态
+- “融合画面 (cam2)” 会显示在监控设备列表与视频宫格里
+- 录像操作仍只支持 `cam0 / cam1`，如果当前选中 `cam2`，详情里会显示“录像状态：不支持”
 
 ## 常见问题
 
