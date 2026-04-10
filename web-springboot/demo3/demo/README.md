@@ -17,6 +17,8 @@
 - 用户管理（注册、登录、权限控制）
 - 检测记录管理
 - 摄像头设备管理
+- RKNN 视觉服务集成
+- 内置模型 / 上传模型切换
 - WebSocket实时通信
 - JWT认证
 
@@ -25,7 +27,7 @@
 ### 1. 环境准备
 - JDK 17+
 - MySQL 8.0+
-- Gradle 7.0+
+- Gradle 8.x
 
 ### 2. 数据库配置
 1. 创建数据库：
@@ -33,13 +35,11 @@
 CREATE DATABASE campus_violence CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-2. 修改 `application.yml` 中的数据库连接信息：
-```yaml
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/campus_violence?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
-    username: root
-    password: 你的密码
+2. 修改 `src/main/resources/application.properties` 中的数据库连接信息：
+```properties
+spring.datasource.url=jdbc:mysql://localhost:3306/campus_violence?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+spring.datasource.username=root
+spring.datasource.password=你的密码
 ```
 
 ### 3. 运行项目
@@ -49,10 +49,55 @@ spring:
 
 或者使用IDE运行 `DemoApplication.java`
 
+说明：
+
+- 项目内置的 `./gradlew` 已默认指向 `/home/orangepi/Desktop/web/bishebeifen-master/web-springboot/gradle-8.14.1/bin/gradle`
+- 不需要再单独设置 `GRADLE_HOME`
+
 ### 4. 访问接口
 - 健康检查：http://localhost:8080/api/test/health
 - 用户注册：POST http://localhost:8080/api/user/register
 - 用户登录：POST http://localhost:8080/api/user/login
+- RKNN 状态：GET http://localhost:8080/api/rknn/status
+
+## RKNN 集成说明
+
+### 1. 视觉服务地址
+
+默认配置：
+
+```properties
+rknn.server.host=localhost
+rknn.server.port=8091
+```
+
+### 2. 模型管理
+
+当前模型管理支持两类来源：
+
+- 内置模型：
+  - `yolov8s`
+  - `yolov8n`
+- 上传模型：
+  - `.rknn` 检测模型
+  - 同档案关联的 `.txt` 类名文件
+
+后端切换模型时，会把最终的：
+
+- `model=/.../*.rknn`
+- `labels=/.../*.txt`
+
+一起下发给 RKNN 视觉服务。
+
+### 3. 状态接口地址改写
+
+`/api/rknn/status` 会自动把视觉服务返回中的：
+
+- `rtsp_url_cam0`
+- `rtsp_url_cam1`
+- `rtsp_url_video`
+
+从 `127.0.0.1/localhost` 改写成当前请求主机地址，方便浏览器直接拿去播放或生成 WebRTC 地址。
 
 ## API文档
 

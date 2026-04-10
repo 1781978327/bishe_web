@@ -13,6 +13,8 @@
 
 - HTTP: `8091`
 - RTSP: `8554`，需外部 RTSP 服务器接收，例如 `mediamtx`
+- WebRTC(WHEP): `8889`
+- WebRTC ICE: `8189/udp`
 
 ## 目录说明
 
@@ -29,6 +31,8 @@ yolov8-rk3588-cpp-3-15/
 常用模型：
 
 - 检测模型：`model/RK3588/yolov8s.rknn`
+- 检测模型：`model/RK3588/yolov8n.rknn`
+- 默认标签：`model/coco_80_labels_list.txt`
 - ReID 模型：`model/RK3588/osnet_x0_25_market.rknn`
 
 ## 依赖
@@ -98,9 +102,19 @@ cmake ..
 make -j2 rknn_http_ctrl rknn_yolov8_demo
 ```
 
-## 启动 RTSP 服务器
+## 启动 RTSP / WebRTC 服务器
 
-服务端只负责“推”，不负责创建 RTSP 服务端，所以需要先启动 `mediamtx` 或其他 RTSP 服务器。
+服务端只负责“推”，不负责实现完整的流媒体协议，因此需要 `mediamtx` 或其他 RTSP/WebRTC 服务器。
+
+当前版本支持两种方式：
+
+### 方式 1：交给 `rknn_http_ctrl` 自动拉起（推荐）
+
+- 推荐从 `build_release` 目录启动主程序
+- 自动拉起时会优先读取 `build_release/mediamtx.yml`
+- 同时开放 `8554 / 8889 / 8189`
+
+### 方式 2：手动启动 `mediamtx`
 
 例如：
 
@@ -112,6 +126,12 @@ make -j2 rknn_http_ctrl rknn_yolov8_demo
 
 ```bash
 ss -ltn | grep 8554
+```
+
+如果需要确认 WebRTC 监听：
+
+```bash
+ss -ltnup | grep -E '8889|8189'
 ```
 
 ## 启动 HTTP 服务
@@ -155,6 +175,21 @@ TRACKER_REID_MODEL=/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-c
 ```bash
 v4l2-ctl --list-devices
 ls /dev/video*
+```
+
+如果启动时出现：
+
+- `Device '/dev/video0' is busy`
+- `Device '/dev/video2' is busy`
+- `bind 端口 8091 失败`
+
+通常是旧的视觉服务没有退出干净，先执行：
+
+```bash
+printf 'orangepi\n' | sudo -S pkill -x rknn_http_ctrl || true
+printf 'orangepi\n' | sudo -S pkill -x mediamtx || true
+printf 'orangepi\n' | sudo -S fuser -v /dev/video0 /dev/video2 || true
+ss -ltnp | grep -E '8091|8554|8889' || true
 ```
 
 ## HTTP API 快速使用
@@ -242,6 +277,13 @@ RTSP 地址：
 
 - `rtsp://127.0.0.1:8554/cam0`
 - `rtsp://127.0.0.1:8554/cam1`
+
+WebRTC/WHEP 地址：
+
+- `http://127.0.0.1:8889/cam0/whep`
+- `http://127.0.0.1:8889/cam1/whep`
+
+如果前端与视觉服务在同一局域网，建议前端按“当前访问页面主机”动态生成 WHEP 地址，不要在 `.env.local` 中长期写死某个旧 IP。
 
 切换当前摄像头编号（仅切换状态字段，不会修改固定 RTSP 路由）：
 

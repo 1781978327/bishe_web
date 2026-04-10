@@ -7,6 +7,9 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 说明：
 - `./gradlew` 已默认指向项目内预装的 `/home/orangepi/Desktop/web/bishebeifen-master/web-springboot/gradle-8.14.1/bin/gradle`
 - 不需要再额外设置 `GRADLE_HOME`
+- 后端监听端口：`8080`
+- 上下文路径：`/api`
+- 当前已放行常见开发网段的 CORS：`localhost`、`127.0.0.1`、`10.*`、`172.*`、`192.168.*`
 
 2. 直接使用预安装的 gradle：
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
@@ -14,3 +17,10 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 
 3. 带配置启动：
 ./gradlew bootRun -Dspring.profiles.active=dev
+
+补充说明：
+
+- `/api/rknn/status` 现在会根据当前请求主机，自动把返回结果中的 `rtsp_url_cam0/cam1/cam3` 从 `127.0.0.1` 改写成当前浏览器可访问的主机地址，更适合同一局域网下的前后端联调。
+- 模型管理已支持两类来源：
+  - 内置模型：`yolov8s`、`yolov8n`
+  - 用户上传模型：`.rknn + 对应 .txt`

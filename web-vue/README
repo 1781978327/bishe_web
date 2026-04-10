@@ -36,12 +36,17 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_release
-sudo ./rknn_http_ctrl --port 8091
+sudo ./rknn_http_ctrl --cam0-source /dev/video0 --cam1-source /dev/video2
 ```
 
 视觉服务地址:
 
 - `http://127.0.0.1:8091`
+
+说明：
+
+- 推荐从 `build_release` 目录启动，确保自动拉起的 `mediamtx` 能正确读取 `build_release/mediamtx.yml`
+- 如果摄像头号不同，请先用 `v4l2-ctl --list-devices` 确认设备号
 
 ## 4. 快速联通自检
 
@@ -83,14 +88,24 @@ curl -X POST "http://127.0.0.1:8091/api/inference/off"
 
 ## 8. 切换到 WebRTC 低延迟播放
 
-前端默认走 HLS。要测试 WebRTC 延迟，在 `web-vue` 目录新增 `.env.development`：
+前端默认走 HLS。要切到 WebRTC，可在 `web-vue/.env.local` 或 `.env.development` 中设置：
 
 ```bash
 VITE_STREAM_PROTOCOL=webrtc
-VITE_WEBRTC_BASE_URL=http://192.168.137.224:8889
 ```
 
-然后重启前端：
+正常情况下不需要再写 `VITE_WEBRTC_BASE_URL`。当前前端会自动使用“你访问页面时的主机地址”来生成：
+
+- `http://<当前页面主机>:8889/cam0/whep`
+- `http://<当前页面主机>:8889/cam1/whep`
+
+只有在 WebRTC 服务明确部署在另一台机器时，才建议额外设置：
+
+```bash
+VITE_WEBRTC_BASE_URL=http://<单独的流媒体主机>:8889
+```
+
+修改环境变量后，重启前端：
 
 ```bash
 npm run dev -- --host 0.0.0.0 --port 3000
@@ -100,3 +115,43 @@ npm run dev -- --host 0.0.0.0 --port 3000
 
 - `VITE_STREAM_PROTOCOL=webrtc` 时，监控页会使用 `http://<host>:8889/<path>/whep` 建连。
 - 不设置该变量或设为 `hls` 时，保持原 HLS 播放。
+- 如果修改过 `.env.local`，浏览器建议执行一次强制刷新：`Ctrl + Shift + R`
+
+## 9. 常见问题
+
+### 1. 实时监控仍然连旧 IP
+
+先检查：
+
+```bash
+cat /home/orangepi/Desktop/web/bishebeifen-master/web-vue/.env.local
+```
+
+如果存在旧的：
+
+```bash
+VITE_WEBRTC_BASE_URL=http://旧IP:8889
+```
+
+请删除或改成新的流媒体主机地址，然后重启前端。
+
+### 2. 摄像头 busy / 8091 端口占用
+
+通常是旧的视觉服务没退出干净：
+
+```bash
+printf 'orangepi\n' | sudo -S pkill -x rknn_http_ctrl || true
+printf 'orangepi\n' | sudo -S pkill -x mediamtx || true
+printf 'orangepi\n' | sudo -S fuser -v /dev/video0 /dev/video2 || true
+ss -ltnp | grep -E '8091|8554|8889' || true
+```
+
+### 3. Dashboard 获取禁入区当前帧返回 503
+
+接口：
+
+```bash
+curl -i "http://127.0.0.1:8080/api/rknn/frame/current?cameraId=1&track=0"
+```
+
+这个接口在视觉服务刚启动、摄像头还未就绪，或者当前没有可用帧时，可能短暂返回 `503`。服务稳定后通常会恢复为 `200 image/jpeg`。
