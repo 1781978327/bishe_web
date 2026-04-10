@@ -48,6 +48,9 @@ public class SensorService {
     @Value("${sensor.server.port:8088}")
     private int sensorServerPort;
 
+    @Value("${sensor.poll.interval-ms:1000}")
+    private long sensorPollIntervalMs;
+
     // 监测开关
     private final AtomicBoolean monitoringEnabled = new AtomicBoolean(false);
 
@@ -91,6 +94,7 @@ public class SensorService {
 
         log.info("SensorService initialized");
         log.info("  Sensor Server: http://{}:{}", sensorServerHost, sensorServerPort);
+        log.info("  Sensor Poll Interval: {} ms", sensorPollIntervalMs);
 
         // 检查 HTTP 服务器是否可用
         if (isHttpServerAvailable()) {
@@ -394,10 +398,10 @@ public class SensorService {
     }
 
     /**
-     * 定时任务：每5秒读取一次传感器数据
+     * 定时任务：按配置周期读取一次传感器数据
      * 只有在监测开启时才执行
      */
-    @Scheduled(fixedRate = 5000)
+    @Scheduled(fixedRateString = "${sensor.poll.interval-ms:1000}")
     public void scheduledSensorRead() {
         if (monitoringEnabled.get()) {
             try {

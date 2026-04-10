@@ -38,6 +38,7 @@
 
 #define PORT 8088
 #define DAEMON_MODE 1
+#define SENSOR_UPDATE_INTERVAL_SEC 1
 
 // ============== DHT11 部分 =================
 #include <wiringPi.h>
@@ -399,8 +400,9 @@ int main(int argc, char* argv[]) {
     
     // 保持运行
     while (1) {
-        sleep(5);
-        // 每5秒更新一次传感器数据到全局变量
+        sleep(SENSOR_UPDATE_INTERVAL_SEC);
+        // 定时更新一次传感器数据到全局变量。
+        // DHT11 不建议高于约 1Hz，因此默认保持 1 秒。
         pthread_mutex_lock(&sensor_mutex);
         readAllSensors();
         pthread_mutex_unlock(&sensor_mutex);
