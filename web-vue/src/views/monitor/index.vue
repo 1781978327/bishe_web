@@ -342,8 +342,8 @@
           </div>
           <div class="info-item">
             <span class="label">录像状态：</span>
-            <el-tag :type="activeRecordingStatus?.recording ? 'danger' : 'info'">
-              {{ activeRecordingStatus?.recording ? '录像中' : '未录像' }}
+            <el-tag :type="activeCameraSupportsRecording ? (activeRecordingStatus?.recording ? 'danger' : 'info') : 'warning'">
+              {{ activeCameraSupportsRecording ? (activeRecordingStatus?.recording ? '录像中' : '未录像') : '不支持' }}
             </el-tag>
           </div>
           <div v-if="activeRecordingStatus?.file" class="info-item">
@@ -856,6 +856,11 @@ const resolveRecordingCameraId = (camera?: Camera | null): number | null => {
   return null
 }
 
+const isMosaicCamera = (camera?: Camera | null): boolean => {
+  if (!camera) return false
+  return camera.rtspUrl.includes('/cam2')
+}
+
 const isRtspLikeText = (value: string): boolean => {
   const normalized = value.trim().toLowerCase()
   return normalized.startsWith('rtsp://')
@@ -868,6 +873,7 @@ const getDefaultCameraDisplayName = (camera: Camera): string => {
   const mappedId = resolveRecordingCameraId(camera)
   if (mappedId === 1) return '摄像头1 (cam0)'
   if (mappedId === 2) return '摄像头2 (cam1)'
+  if (isMosaicCamera(camera)) return '融合画面 (cam2)'
   return `摄像头${camera.id}`
 }
 
@@ -909,8 +915,8 @@ const activeRecordingStatus = computed<RecordingStatusItem | null>(() => {
 const usesPlaceholderLocation = (camera: Camera): boolean => {
   const location = (camera.location || '').trim()
   const name = (camera.name || '').trim()
-  const isDefaultName = name === '摄像头1' || name === '摄像头2'
-  const isPlaceholder = location === '' || location === '校园门口' || location === '教学楼'
+  const isDefaultName = name === '摄像头1' || name === '摄像头2' || name === '融合画面'
+  const isPlaceholder = location === '' || location === '校园门口' || location === '教学楼' || location === '双路拼接流'
   return isDefaultName && isPlaceholder
 }
 
@@ -939,6 +945,10 @@ const selectedRecordingStatus = computed<RecordingStatusItem | null>(() => {
   if (selectedRecordingCameraId.value === 1) return recordingStatus.value.cam0
   if (selectedRecordingCameraId.value === 2) return recordingStatus.value.cam1
   return null
+})
+
+const activeCameraSupportsRecording = computed(() => {
+  return resolveRecordingCameraId(activeCamera.value) !== null
 })
 
 // 目标检测阈值配置
@@ -1024,6 +1034,28 @@ const buildModelOptionLabel = (profile: ModelProfile): string => {
   }
   if (profile.builtin) return `${profile.baseName}（内置文件缺失）`
   return `${profile.baseName}（缺少.rknn或.txt）`
+}
+
+const cameraMatchesStreamPath = (camera: Camera, path: string): boolean => {
+  return camera.id === 1 && path === 'cam0'
+    || camera.id === 2 && path === 'cam1'
+    || isMosaicCamera(camera) && path === 'cam2'
+    || camera.rtspUrl.includes(`/${path}`)
+}
+
+const inferCameraOnlineStatusFromRknn = (camera: Camera, status: Record<string, any>): number | null => {
+  const serviceRunning = parseBooleanLike(status.running) ?? false
+  if (!serviceRunning) return 0
+
+  const cam0Ready = !!status.input_source_cam0
+  const cam1Ready = !!status.input_source_cam1
+  const mosaicReady = cam0Ready && cam1Ready && typeof status.rtsp_url_mosaic === 'string' && !!status.rtsp_url_mosaic
+
+  if (cameraMatchesStreamPath(camera, 'cam0')) return cam0Ready ? 1 : 0
+  if (cameraMatchesStreamPath(camera, 'cam1')) return cam1Ready ? 1 : 0
+  if (cameraMatchesStreamPath(camera, 'cam2')) return mosaicReady ? 1 : 0
+
+  return null
 }
 
 const syncSelectedModelProfile = () => {
@@ -1687,54 +1719,38 @@ const checkAllCamerasStatus = async () => {
   
   loading.value = true
   try {
-    // 清除所有非故障摄像头的状态
+    const streamStarted = await startRtspStream()
+    if (!streamStarted) {
+      ElMessage.warning('推流未成功启动，已保留当前设备状态')
+      return
+    }
+
+    const res = await fetch('/api/rknn/status')
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+
+    const payload = await res.json()
+    const statusData = payload?.data && typeof payload.data === 'object' ? payload.data : payload
+
+    let updatedCount = 0
     cameras.value.forEach(camera => {
-      if (camera.status !== 2) {
-        camera.status = 0
-      }
+      if (camera.status === 2) return
+      const inferredStatus = inferCameraOnlineStatusFromRknn(camera, statusData)
+      if (inferredStatus === null) return
+      camera.status = inferredStatus
+      updatedCount += 1
     })
-    
-    // 串行检查每个摄像头的状态，跳过故障状态的设备
-    for (const camera of cameras.value) {
-      // 跳过故障状态的设备
-      if (camera.status === 2) {
-        continue
-      }
-      
-      // 发送检测请求
-      wsClient.send({
-        type: 'check_camera',
-        data: {
-          cameraId: camera.id,
-          rtspUrl: camera.rtspUrl
-        }
-      })
-      
-      // 等待检测完成
-      await new Promise<void>((resolve) => {
-        // 创建一个超时检测
-        const timeoutId = setTimeout(() => {
-          // 检测超时，这里不再打印日志以减少控制台噪音
-          resolve()
-        }, 3000) // 给每个摄像头3秒的检测时间
-        
-        // 创建一个一次性的消息处理器
-        const handler = (message: WebSocketMessage) => {
-          if (message.type === 'camera_status' && message.data.cameraId === camera.id) {
-            clearTimeout(timeoutId) // 清除超时定时器
-            wsClient.removeMessageHandler(handler) // 移除这个临时处理器
-            resolve()
-          }
-        }
-        
-        wsClient.addMessageHandler(handler)
-      })
-      
-      // 检测完成后等待一小段时间再检测下一个，避免并发
-      await new Promise(resolve => setTimeout(resolve, 500))
+
+    if (updatedCount > 0) {
+      updateDisplayCameras()
+      ElMessage.success('已按视觉服务运行状态刷新设备状态')
+    } else {
+      ElMessage.info('当前没有可按视觉服务状态校验的设备')
     }
   } catch (error) {
     console.error('检查摄像头状态失败:', error)
+    ElMessage.error(getErrorMessage(error, '检查摄像头状态失败'))
   } finally {
     loading.value = false
   }
@@ -2161,6 +2177,15 @@ const buildDefaultCameras = (): Camera[] => [
     status: 1,
     isEnabled: true,
     detectionEnabled: true
+  },
+  {
+    id: 1003,
+    name: '融合画面',
+    location: '双路拼接流',
+    rtspUrl: buildDefaultRtspUrl('cam2'),
+    status: 1,
+    isEnabled: true,
+    detectionEnabled: false
   }
 ]
 

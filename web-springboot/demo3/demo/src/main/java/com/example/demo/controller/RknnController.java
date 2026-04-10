@@ -290,6 +290,7 @@ public class RknnController {
         Map<String, Object> normalized = new LinkedHashMap<>(status);
         rewriteUrlHost(normalized, "rtsp_url_cam0", requestHost, 8554);
         rewriteUrlHost(normalized, "rtsp_url_cam1", requestHost, 8554);
+        rewriteUrlHost(normalized, "rtsp_url_mosaic", requestHost, 8554);
         rewriteUrlHost(normalized, "rtsp_url_video", requestHost, 8554);
         return normalized;
     }

@@ -82,6 +82,7 @@ std::string g_rtsp_host = DEFAULT_RTSP_HOST;
 int g_rtsp_port = DEFAULT_RTSP_PORT;
 std::string g_rtsp_url_0 = "rtsp://127.0.0.1:8554/cam0";
 std::string g_rtsp_url_1 = "rtsp://127.0.0.1:8554/cam1";
+std::string g_rtsp_url_mosaic = "rtsp://127.0.0.1:8554/cam2";
 std::string g_rtsp_url_video = "rtsp://127.0.0.1:8554/cam3";
 std::string g_input_source_cam0 = "/dev/video0";
 std::string g_input_source_cam1 = "/dev/video2";
@@ -113,7 +114,7 @@ std::atomic<bool> g_model_loaded(false);
 std::atomic<bool> g_model_loading(false);
 std::atomic<int>  g_current_cam(0);
 std::atomic<int>  g_cam0_fps(0), g_cam1_fps(0);
-std::atomic<int>  g_rtsp_cam0_fps(0), g_rtsp_cam1_fps(0), g_rtsp_video_fps(0);
+std::atomic<int>  g_rtsp_cam0_fps(0), g_rtsp_cam1_fps(0), g_rtsp_mosaic_fps(0), g_rtsp_video_fps(0);
 std::mutex g_model_mutex;
 std::string g_model_path = DEFAULT_MODEL_PATH;
 std::string g_label_path = "";
@@ -145,10 +146,12 @@ std::string label_name_for_detection(const DetectionResultItem& det);
 std::atomic<bool> g_rtsp_streaming(false);
 RtspMppSender* g_rtsp_sender0 = nullptr;
 RtspMppSender* g_rtsp_sender1 = nullptr;
+RtspMppSender* g_rtsp_sender_mosaic = nullptr;
 RtspMppSender* g_rtsp_sender_video = nullptr;  // 视频模式专用推流
 std::thread g_video_rtsp_raw_thread;
 std::atomic<bool> g_video_rtsp_raw_running(false);
 std::atomic<bool> g_video_rtsp_raw_stop(false);
+std::atomic<long long> g_rtsp_mosaic_last_push_ms(0);
 std::mutex g_rtsp_mutex;
 
 extern std::atomic<bool> g_video_mode;
@@ -165,7 +168,9 @@ void destroy_rtsp_sender(RtspMppSender*& sender) {
 void stop_rtsp_senders_locked() {
     destroy_rtsp_sender(g_rtsp_sender0);
     destroy_rtsp_sender(g_rtsp_sender1);
+    destroy_rtsp_sender(g_rtsp_sender_mosaic);
     destroy_rtsp_sender(g_rtsp_sender_video);
+    g_rtsp_mosaic_last_push_ms.store(0);
 }
 
 void stop_video_rtsp_raw_thread() {
@@ -616,6 +621,7 @@ void usage_monitor_loop() {
 void refresh_rtsp_urls() {
     g_rtsp_url_0 = "rtsp://" + g_rtsp_host + ":" + std::to_string(g_rtsp_port) + "/cam0";
     g_rtsp_url_1 = "rtsp://" + g_rtsp_host + ":" + std::to_string(g_rtsp_port) + "/cam1";
+    g_rtsp_url_mosaic = "rtsp://" + g_rtsp_host + ":" + std::to_string(g_rtsp_port) + "/cam2";
     g_rtsp_url_video = "rtsp://" + g_rtsp_host + ":" + std::to_string(g_rtsp_port) + "/cam3";
 }
 
@@ -1725,6 +1731,113 @@ void update_latest_frame_for_cam(int cam, const cv::Mat& frame, int slot) {
     g_frame_available_cam[cam] = !g_latest_frame_cam[cam].empty();
     g_latest_frame_slot_cam[cam] = slot;
 }
+
+#ifdef USE_RTSP_MPP
+constexpr int MOSAIC_TILE_WIDTH = 640;
+constexpr int MOSAIC_TILE_HEIGHT = 480;
+constexpr int MOSAIC_OUTPUT_WIDTH = MOSAIC_TILE_WIDTH * 2;
+constexpr int MOSAIC_OUTPUT_HEIGHT = MOSAIC_TILE_HEIGHT;
+constexpr int MOSAIC_TARGET_FPS = 30;
+
+void draw_mosaic_placeholder(cv::Mat& tile, const std::string& label) {
+    tile = cv::Mat::zeros(MOSAIC_TILE_HEIGHT, MOSAIC_TILE_WIDTH, CV_8UC3);
+    cv::putText(tile, label,
+                cv::Point(40, MOSAIC_TILE_HEIGHT / 2),
+                cv::FONT_HERSHEY_SIMPLEX, 0.9,
+                cv::Scalar(180, 180, 180), 2, cv::LINE_AA);
+}
+
+void prepare_mosaic_tile(const cv::Mat& src, const std::string& placeholder, cv::Mat& tile) {
+    if (src.empty()) {
+        draw_mosaic_placeholder(tile, placeholder);
+        return;
+    }
+
+    if (src.cols == MOSAIC_TILE_WIDTH && src.rows == MOSAIC_TILE_HEIGHT) {
+        tile = src.clone();
+    } else {
+        cv::resize(src, tile, cv::Size(MOSAIC_TILE_WIDTH, MOSAIC_TILE_HEIGHT));
+    }
+}
+
+bool build_mosaic_frame(int updated_cam, const cv::Mat& updated_frame, cv::Mat& mosaic_frame) {
+    cv::Mat cam0_frame;
+    cv::Mat cam1_frame;
+
+    if (updated_cam == 0 && !updated_frame.empty()) {
+        cam0_frame = updated_frame;
+    } else {
+        std::lock_guard<std::mutex> lock(g_latest_frame_cam_mutex[0]);
+        if (!g_latest_frame_cam[0].empty()) {
+            cam0_frame = g_latest_frame_cam[0].clone();
+        }
+    }
+
+    if (updated_cam == 1 && !updated_frame.empty()) {
+        cam1_frame = updated_frame;
+    } else {
+        std::lock_guard<std::mutex> lock(g_latest_frame_cam_mutex[1]);
+        if (!g_latest_frame_cam[1].empty()) {
+            cam1_frame = g_latest_frame_cam[1].clone();
+        }
+    }
+
+    if (cam0_frame.empty() && cam1_frame.empty()) {
+        return false;
+    }
+
+    cv::Mat left_tile;
+    cv::Mat right_tile;
+    prepare_mosaic_tile(cam0_frame, "cam0 unavailable", left_tile);
+    prepare_mosaic_tile(cam1_frame, "cam1 unavailable", right_tile);
+
+    mosaic_frame = cv::Mat::zeros(MOSAIC_OUTPUT_HEIGHT, MOSAIC_OUTPUT_WIDTH, CV_8UC3);
+    left_tile.copyTo(mosaic_frame(cv::Rect(0, 0, MOSAIC_TILE_WIDTH, MOSAIC_TILE_HEIGHT)));
+    right_tile.copyTo(mosaic_frame(cv::Rect(MOSAIC_TILE_WIDTH, 0, MOSAIC_TILE_WIDTH, MOSAIC_TILE_HEIGHT)));
+
+    cv::line(mosaic_frame,
+             cv::Point(MOSAIC_TILE_WIDTH, 0),
+             cv::Point(MOSAIC_TILE_WIDTH, MOSAIC_OUTPUT_HEIGHT),
+             cv::Scalar(255, 255, 255), 2, cv::LINE_AA);
+    cv::putText(mosaic_frame, "cam0",
+                cv::Point(16, 34), cv::FONT_HERSHEY_SIMPLEX, 0.9,
+                cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+    cv::putText(mosaic_frame, "cam1",
+                cv::Point(MOSAIC_TILE_WIDTH + 16, 34), cv::FONT_HERSHEY_SIMPLEX, 0.9,
+                cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+    return true;
+}
+
+bool should_push_mosaic_frame() {
+    long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    long long last_ms = g_rtsp_mosaic_last_push_ms.load();
+    long long min_interval_ms = 1000 / MOSAIC_TARGET_FPS;
+    if (last_ms > 0 && (now_ms - last_ms) < min_interval_ms) {
+        return false;
+    }
+    g_rtsp_mosaic_last_push_ms.store(now_ms);
+    return true;
+}
+
+void push_mosaic_rtsp_if_needed(int updated_cam, const cv::Mat& updated_frame, int& push_mosaic_counter) {
+    if (updated_cam < 0 || updated_cam > 1) return;
+    if (!g_rtsp_sender_mosaic || !g_rtsp_sender_mosaic->inited()) return;
+    if (!should_push_mosaic_frame()) return;
+
+    cv::Mat mosaic_frame;
+    if (!build_mosaic_frame(updated_cam, updated_frame, mosaic_frame) || mosaic_frame.empty()) {
+        return;
+    }
+
+    if (g_rtsp_sender_mosaic->push(mosaic_frame)) {
+        push_mosaic_counter++;
+    } else {
+        printf("[RTSP] Mosaic 推流写包失败，已自动停止，请重新调用 /api/rtsp/start\n");
+        destroy_rtsp_sender(g_rtsp_sender_mosaic);
+    }
+}
+#endif
 
 std::string base64_encode_bytes(const unsigned char* data, size_t len) {
     static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -2974,6 +3087,7 @@ void handle_client(int client_fd) {
         oss << "\"label_path\":\"" << json_escape(active_label_path) << "\",";
         oss << "\"rtsp_url_cam0\":\"" << json_escape(g_rtsp_url_0) << "\",";
         oss << "\"rtsp_url_cam1\":\"" << json_escape(g_rtsp_url_1) << "\",";
+        oss << "\"rtsp_url_mosaic\":\"" << json_escape(g_rtsp_url_mosaic) << "\",";
         oss << "\"rtsp_url_video\":\"" << json_escape(g_rtsp_url_video) << "\",";
         oss << "\"input_source_cam0\":\"" << json_escape(g_input_source_cam0) << "\",";
         oss << "\"input_source_cam1\":\"" << json_escape(g_input_source_cam1) << "\",";
@@ -3000,6 +3114,7 @@ void handle_client(int client_fd) {
         oss << "\"fps\":" << (g_cam0_fps.load() + g_cam1_fps.load()) << ",";
         oss << "\"fps_cam0\":" << g_cam0_fps.load() << ",";
         oss << "\"fps_cam1\":" << g_cam1_fps.load() << ",";
+        oss << "\"fps_rtsp_mosaic\":" << g_rtsp_mosaic_fps.load() << ",";
         oss << "\"tracker_enabled\":" << (g_tracker_enabled ? "true" : "false") << ",";
         oss << "\"tracker_backend\":\"" << json_escape(tracker_backend) << "\",";
         oss << "\"tracker_reid_model\":\"" << json_escape(tracker_reid_model) << "\",";
@@ -3474,10 +3589,10 @@ void handle_client(int client_fd) {
         std::string mediamtx_detail;
         (void)start_mediamtx_if_needed("/api/rtsp/start", &mediamtx_detail);
         std::lock_guard<std::mutex> lock(g_rtsp_mutex);
-        printf("[RTSP] /api/rtsp/start 请求: streaming=%d video_mode=%d sender0=%p sender1=%p senderV=%p rss=%ldKB\n",
+        printf("[RTSP] /api/rtsp/start 请求: streaming=%d video_mode=%d sender0=%p sender1=%p senderM=%p senderV=%p rss=%ldKB\n",
                g_rtsp_streaming.load() ? 1 : 0,
                g_video_mode.load() ? 1 : 0,
-               (void*)g_rtsp_sender0, (void*)g_rtsp_sender1, (void*)g_rtsp_sender_video,
+               (void*)g_rtsp_sender0, (void*)g_rtsp_sender1, (void*)g_rtsp_sender_mosaic, (void*)g_rtsp_sender_video,
                get_process_rss_kb());
         if (g_video_mode.load() && g_rtsp_streaming.load() &&
             g_rtsp_sender_video && g_rtsp_sender_video->inited()) {
@@ -3486,7 +3601,8 @@ void handle_client(int client_fd) {
         }
         if (!g_video_mode.load() && g_rtsp_streaming.load() &&
             g_rtsp_sender0 && g_rtsp_sender0->inited() &&
-            g_rtsp_sender1 && g_rtsp_sender1->inited()) {
+            g_rtsp_sender1 && g_rtsp_sender1->inited() &&
+            g_rtsp_sender_mosaic && g_rtsp_sender_mosaic->inited()) {
             send_response(client_fd, build_json_response("success", "摄像头 RTSP 已在运行"), "application/json");
             return;
         }
@@ -3578,6 +3694,23 @@ void handle_client(int client_fd) {
                     cam1_ok = true;
                 }
             }
+            bool mosaic_ok = (g_rtsp_sender_mosaic != nullptr && g_rtsp_sender_mosaic->inited());
+            if (!mosaic_ok) {
+                if (g_rtsp_sender_mosaic) {
+                    delete g_rtsp_sender_mosaic;
+                    g_rtsp_sender_mosaic = nullptr;
+                }
+                g_rtsp_sender_mosaic = new RtspMppSender();
+                if (!g_rtsp_sender_mosaic->init(g_rtsp_url_mosaic.c_str(), MOSAIC_OUTPUT_WIDTH, MOSAIC_OUTPUT_HEIGHT, MOSAIC_TARGET_FPS)) {
+                    delete g_rtsp_sender_mosaic;
+                    g_rtsp_sender_mosaic = nullptr;
+                    printf("[RTSP] Mosaic 启动失败: %s\n", g_rtsp_url_mosaic.c_str());
+                } else {
+                    g_rtsp_mosaic_last_push_ms.store(0);
+                    printf("[RTSP] Mosaic 已启动 (%dx%d @ %dfps)\n", MOSAIC_OUTPUT_WIDTH, MOSAIC_OUTPUT_HEIGHT, MOSAIC_TARGET_FPS);
+                    mosaic_ok = true;
+                }
+            }
             if (!cam0_ok && !cam1_ok) {
                 g_rtsp_streaming = false;
                 send_response(client_fd,
@@ -3587,14 +3720,14 @@ void handle_client(int client_fd) {
             }
             g_rtsp_streaming = true;
             if (g_model_loaded.load()) {
-                printf("[RTSP] /api/rtsp/start 成功: cam0=%d cam1=%d rss=%ldKB\n",
-                       cam0_ok ? 1 : 0, cam1_ok ? 1 : 0, get_process_rss_kb());
+                printf("[RTSP] /api/rtsp/start 成功: cam0=%d cam1=%d mosaic=%d rss=%ldKB\n",
+                       cam0_ok ? 1 : 0, cam1_ok ? 1 : 0, mosaic_ok ? 1 : 0, get_process_rss_kb());
                 send_response(client_fd,
                     build_json_response("success", "RTSP 推流已启动"),
                     "application/json");
             } else {
-                printf("[RTSP] /api/rtsp/start 成功(裸流): cam0=%d cam1=%d rss=%ldKB\n",
-                       cam0_ok ? 1 : 0, cam1_ok ? 1 : 0, get_process_rss_kb());
+                printf("[RTSP] /api/rtsp/start 成功(裸流): cam0=%d cam1=%d mosaic=%d rss=%ldKB\n",
+                       cam0_ok ? 1 : 0, cam1_ok ? 1 : 0, mosaic_ok ? 1 : 0, get_process_rss_kb());
                 send_response(client_fd,
                     build_json_response("success", "RTSP 裸流已启动（未开启推理）"),
                     "application/json");
@@ -4048,8 +4181,9 @@ int main(int argc, char** argv) {
 
     refresh_rtsp_urls();
     print_banner();
-    printf("[RTSP] 推流目标: %s | %s | %s\n",
-           g_rtsp_url_0.c_str(), g_rtsp_url_1.c_str(), g_rtsp_url_video.c_str());
+    printf("[RTSP] 推流目标: %s | %s | %s | %s\n",
+           g_rtsp_url_0.c_str(), g_rtsp_url_1.c_str(),
+           g_rtsp_url_mosaic.c_str(), g_rtsp_url_video.c_str());
     printf("[RTSP] 预绑定 DMA: %s (RTSP_PREBIND_DMA=%s)\n",
            rtsp_prebind_dma ? "开启" : "关闭",
            rtsp_prebind_dma ? "1" : "0");
@@ -4155,7 +4289,7 @@ int main(int argc, char** argv) {
     
     // FPS 统计
     int frames0 = 0, frames1 = 0;
-    int push0 = 0, push1 = 0;
+    int push0 = 0, push1 = 0, push_mosaic = 0;
     bool video_raw_pace_initialized = false;
     auto video_raw_next_deadline = std::chrono::steady_clock::now();
     long long last_source_reopen_ms[2] = {0, 0};
@@ -4210,6 +4344,7 @@ int main(int argc, char** argv) {
                                 draw_rtsp_fps_overlay(raw0, g_rtsp_cam0_fps.load());
                                 if (g_rtsp_sender0->push(raw0)) {
                                     push0++;
+                                    push_mosaic_rtsp_if_needed(0, raw0, push_mosaic);
                                 } else {
                                     printf("[RTSP] Cam0 裸流写包失败，已自动停止\n");
                                     g_rtsp_streaming = false;
@@ -4232,6 +4367,7 @@ int main(int argc, char** argv) {
                                 draw_rtsp_fps_overlay(raw1, g_rtsp_cam1_fps.load());
                                 if (g_rtsp_sender1->push(raw1)) {
                                     push1++;
+                                    push_mosaic_rtsp_if_needed(1, raw1, push_mosaic);
                                 } else {
                                     printf("[RTSP] Cam1 裸流写包失败，已自动停止\n");
                                     g_rtsp_streaming = false;
@@ -4253,15 +4389,17 @@ int main(int argc, char** argv) {
                     g_cam1_fps.store((int)(frames1 / elapsed));
                     g_rtsp_cam0_fps.store((int)(push0 / elapsed));
                     g_rtsp_cam1_fps.store((int)(push1 / elapsed));
+                    g_rtsp_mosaic_fps.store((int)(push_mosaic / elapsed));
                     g_rtsp_video_fps.store(0);
-                    if (push0 > 0 || push1 > 0) {
-                        printf("[FPS-RAW] Cam0: %d FPS | Cam1: %d FPS | RTSP: %d | %d\n",
-                               g_cam0_fps.load(), g_cam1_fps.load(), push0, push1);
+                    if (push0 > 0 || push1 > 0 || push_mosaic > 0) {
+                        printf("[FPS-RAW] Cam0: %d FPS | Cam1: %d FPS | RTSP: %d | %d | Mosaic: %d\n",
+                               g_cam0_fps.load(), g_cam1_fps.load(), push0, push1, push_mosaic);
                     }
                     frames0 = 0;
                     frames1 = 0;
                     push0 = 0;
                     push1 = 0;
+                    push_mosaic = 0;
                     last_fps_time_ms = now_ms;
                 }
                 continue;
@@ -4271,6 +4409,7 @@ int main(int argc, char** argv) {
             g_cam1_fps.store(0);
             g_rtsp_cam0_fps.store(0);
             g_rtsp_cam1_fps.store(0);
+            g_rtsp_mosaic_fps.store(0);
             g_rtsp_video_fps.store(0);
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
@@ -4386,6 +4525,7 @@ int main(int argc, char** argv) {
                                 }
                                 if (pushed_ok) {
                                     push0++;
+                                    push_mosaic_rtsp_if_needed(0, frame_for_rtsp, push_mosaic);
                                 } else {
                                     printf("[RTSP] Cam0 推流写包失败，已自动停止，请重新调用 /api/rtsp/start\n");
                                     g_rtsp_streaming = false;
@@ -4408,6 +4548,7 @@ int main(int argc, char** argv) {
                                 }
                                 if (pushed_ok) {
                                     push1++;
+                                    push_mosaic_rtsp_if_needed(1, frame_for_rtsp, push_mosaic);
                                 } else {
                                     printf("[RTSP] Cam1 推流写包失败，已自动停止，请重新调用 /api/rtsp/start\n");
                                     g_rtsp_streaming = false;
@@ -4686,16 +4827,18 @@ int main(int argc, char** argv) {
                 g_rtsp_video_fps.store((int)(push0 / elapsed));
                 g_rtsp_cam0_fps.store(0);
                 g_rtsp_cam1_fps.store(0);
+                g_rtsp_mosaic_fps.store(0);
             } else {
                 g_rtsp_cam0_fps.store((int)(push0 / elapsed));
                 g_rtsp_cam1_fps.store((int)(push1 / elapsed));
+                g_rtsp_mosaic_fps.store((int)(push_mosaic / elapsed));
                 g_rtsp_video_fps.store(0);
             }
             
 #ifdef USE_RTSP_MPP
-            if (g_rtsp_streaming.load() && (push0 > 0 || push1 > 0)) {
-                printf("[FPS] Cam0: %d FPS | Cam1: %d FPS | RTSP: %d | %d\n",
-                       g_cam0_fps.load(), g_cam1_fps.load(), push0, push1);
+            if (g_rtsp_streaming.load() && (push0 > 0 || push1 > 0 || push_mosaic > 0)) {
+                printf("[FPS] Cam0: %d FPS | Cam1: %d FPS | RTSP: %d | %d | Mosaic: %d\n",
+                       g_cam0_fps.load(), g_cam1_fps.load(), push0, push1, push_mosaic);
             }
 #else
             // 无 RTSP 时也打印 FPS
@@ -4709,6 +4852,7 @@ int main(int argc, char** argv) {
             frames1 = 0;
             push0 = 0;
             push1 = 0;
+            push_mosaic = 0;
             last_fps_time_ms = now_ms;
         }
     }
