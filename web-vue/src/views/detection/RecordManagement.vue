@@ -872,7 +872,7 @@ const formatEventType = (type: string) => {
     // 环境异常类
     case 'env_smoke': return '环境异常'
     case 'env_fire': return '环境异常'
-    case 'env_intrusion': return '环境异常'
+    case 'env_intrusion': return '摄像头异常'
     case 'env_other': return '环境异常'
     default: return type
   }
@@ -894,6 +894,8 @@ const formatEventTypeFromRecord = (row: any) => {
     if (low.includes('fall') || low.includes('fight') || low.includes('knife')) return '监控异常'
     // 声音异常类
     if (low.includes('sound_') || low.includes('cry')) return '声音异常'
+    // 异常闯入归类为摄像头异常
+    if (low.includes('env_intrusion')) return '摄像头异常'
     // 环境异常类
     if (low.includes('env_')) return '环境异常'
     return '-'

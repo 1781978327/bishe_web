@@ -35,9 +35,9 @@ public interface DetectionRecordRepository extends JpaRepository<DetectionRecord
     @Query("SELECT d FROM DetectionRecord d WHERE d.aiDescription LIKE %:keyword% ORDER BY d.detectionTime DESC")
     Page<DetectionRecord> findByEventTypeKeyword(@Param("keyword") String keyword, Pageable pageable);
 
-    // 按视频类事件查询 (fall, fight, knife)
+    // 按视频类事件查询 (fall, fight, knife, env_intrusion)
     @Query("SELECT d FROM DetectionRecord d WHERE " +
-           "(d.aiDescription LIKE '%fall%' OR d.aiDescription LIKE '%fight%' OR d.aiDescription LIKE '%knife%') " +
+           "(d.aiDescription LIKE '%fall%' OR d.aiDescription LIKE '%fight%' OR d.aiDescription LIKE '%knife%' OR d.aiDescription LIKE '%env_intrusion%') " +
            "ORDER BY d.detectionTime DESC")
     Page<DetectionRecord> findByVideoEvents(Pageable pageable);
 
@@ -45,7 +45,7 @@ public interface DetectionRecordRepository extends JpaRepository<DetectionRecord
     @Query("SELECT d FROM DetectionRecord d WHERE d.aiDescription LIKE '%sound_%' ORDER BY d.detectionTime DESC")
     Page<DetectionRecord> findBySoundEvents(Pageable pageable);
 
-    // 按环境类事件查询 (env_*)
-    @Query("SELECT d FROM DetectionRecord d WHERE d.aiDescription LIKE '%env_%' ORDER BY d.detectionTime DESC")
+    // 按环境类事件查询 (env_*，不含 env_intrusion)
+    @Query("SELECT d FROM DetectionRecord d WHERE d.aiDescription LIKE '%env_%' AND d.aiDescription NOT LIKE '%env_intrusion%' ORDER BY d.detectionTime DESC")
     Page<DetectionRecord> findByEnvEvents(Pageable pageable);
 }

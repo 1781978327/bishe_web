@@ -1,6 +1,9 @@
 package com.example.demo.controller;
 
 import com.example.demo.dto.Result;
+import com.example.demo.service.ModelProfileService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -19,12 +22,15 @@ import java.util.HashMap;
 import java.util.Map;
 import jakarta.servlet.http.HttpServletRequest;
 
+@Slf4j
 @RestController
 @RequestMapping("/file")
+@RequiredArgsConstructor
 public class FileController {
 
     private static final Path UPLOAD_ROOT = Paths.get("./uploads").toAbsolutePath().normalize();
     private static final long MAX_MODEL_FILE_SIZE = 200L * 1024 * 1024;
+    private final ModelProfileService modelProfileService;
 
     @PostMapping("/upload/{bucket}")
     public Result<Map<String, Object>> upload(@PathVariable("bucket") String bucket,
@@ -82,6 +88,16 @@ public class FileController {
         }
 
         file.transferTo(target.toFile());
+
+        if ("models".equalsIgnoreCase(bucket)) {
+            try {
+                modelProfileService.registerUpload(folder, originalFilename, objectKey);
+            } catch (Exception e) {
+                // 上传成功不应被关联失败阻塞
+                log.warn("记录模型关联失败: username={}, file={}, key={}, err={}",
+                        folder, originalFilename, objectKey, e.getMessage());
+            }
+        }
 
         Map<String, Object> data = new HashMap<>();
         data.put("bucket", bucket);
@@ -152,4 +168,3 @@ public class FileController {
         return objectKey.replace("\\", "/");
     }
 }
-

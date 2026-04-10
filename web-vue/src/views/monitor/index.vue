@@ -40,6 +40,23 @@
           <el-option label="ByteTrack" value="bytetrack" />
           <el-option label="DeepSORT" value="deepsort" />
         </el-select>
+        <el-select
+          v-model="selectedModelProfileId"
+          class="model-select"
+          size="small"
+          placeholder="选择模型"
+          :loading="loadingModelProfiles"
+          :disabled="loadingModelProfiles || modelProfiles.length === 0"
+          @change="handleModelProfileChange"
+        >
+          <el-option
+            v-for="profile in modelProfiles"
+            :key="profile.id"
+            :label="buildModelOptionLabel(profile)"
+            :value="profile.id"
+            :disabled="!profile.ready"
+          />
+        </el-select>
       </div>
       <div class="right">
         <el-button-group>
@@ -569,6 +586,7 @@ import type { WebSocketMessage } from '@/utils/websocket'
 import VideoPlayer from '@/components/VideoPlayer/index.vue'
 import { pageDetectionRecords, type DetectionRecord, type DetectionRecordQueryParams } from '@/api/detection'
 import { getUserList } from '@/api/user'
+import { listModelProfiles, selectModelProfile, type ModelProfile } from '@/api/model'
 import type { UserInfo } from '@/types/user'
 import { 
   Monitor, Grid, Refresh, VideoCameraFilled, Select,
@@ -645,6 +663,18 @@ type TrackerBackend = 'bytetrack' | 'deepsort'
 const TRACKER_BACKEND_STORAGE_KEY = 'monitorTrackerBackend'
 const TRACKING_ENABLED_STORAGE_KEY = 'monitorTrackingEnabled'
 const trackerBackend = ref<TrackerBackend>('bytetrack')
+const modelProfiles = ref<ModelProfile[]>([])
+const loadingModelProfiles = ref(false)
+const selectedModelProfileId = ref<number | null>(null)
+
+const readyModelProfiles = computed(() => {
+  return modelProfiles.value.filter(profile => profile.ready)
+})
+
+const selectedModelProfile = computed(() => {
+  if (selectedModelProfileId.value === null) return null
+  return modelProfiles.value.find(profile => profile.id === selectedModelProfileId.value) ?? null
+})
 
 // 目标检测阈值配置
 const objectDetectionSettings = ref({
@@ -698,6 +728,118 @@ const loadTrackingEnabled = () => {
   const parsed = parseBooleanLike(saved)
   if (parsed !== null) {
     trackingEnabled.value = parsed
+  }
+}
+
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+  ) {
+    const message = (error as { message: string }).message.trim()
+    if (message) return message
+  }
+  return fallback
+}
+
+const buildModelOptionLabel = (profile: ModelProfile): string => {
+  if (profile.ready) return profile.baseName
+  return `${profile.baseName}（缺少.rknn或.txt）`
+}
+
+const syncSelectedModelProfile = () => {
+  const selectedByServer = modelProfiles.value.find(profile => profile.selected && profile.ready)
+  if (selectedByServer) {
+    selectedModelProfileId.value = selectedByServer.id
+    return
+  }
+
+  if (
+    selectedModelProfileId.value !== null &&
+    modelProfiles.value.some(profile => profile.id === selectedModelProfileId.value && profile.ready)
+  ) {
+    return
+  }
+
+  selectedModelProfileId.value = readyModelProfiles.value[0]?.id ?? null
+}
+
+const fetchModelProfiles = async (silent = true) => {
+  loadingModelProfiles.value = true
+  try {
+    const profiles = await listModelProfiles()
+    modelProfiles.value = Array.isArray(profiles) ? profiles : []
+    syncSelectedModelProfile()
+    if (!silent && readyModelProfiles.value.length === 0) {
+      ElMessage.warning('暂无可用模型，请先上传 .rknn 和同名 .txt')
+    }
+  } catch (error) {
+    console.error('获取模型列表失败:', error)
+    if (!silent) {
+      ElMessage.error(getErrorMessage(error, '获取模型列表失败'))
+    }
+  } finally {
+    loadingModelProfiles.value = false
+  }
+}
+
+const applySelectedModelProfile = async (silent = false): Promise<boolean> => {
+  if (modelProfiles.value.length === 0) {
+    await fetchModelProfiles(true)
+  }
+
+  if (selectedModelProfileId.value === null) {
+    const fallbackProfile = readyModelProfiles.value[0]
+    if (fallbackProfile) {
+      selectedModelProfileId.value = fallbackProfile.id
+    }
+  }
+
+  const profile = selectedModelProfile.value
+  if (!profile) {
+    if (!silent) {
+      ElMessage.warning('暂无可用模型，请先上传 .rknn 和同名 .txt')
+    }
+    return false
+  }
+
+  if (!profile.ready) {
+    if (!silent) {
+      ElMessage.warning(`模型 ${profile.baseName} 未就绪，请确保已上传 .rknn 和 .txt`)
+    }
+    return false
+  }
+
+  try {
+    await selectModelProfile(profile.id)
+    await fetchModelProfiles(true)
+    return true
+  } catch (error) {
+    console.error('加载模型失败:', error)
+    await fetchModelProfiles(true)
+    if (!silent) {
+      ElMessage.error(getErrorMessage(error, `加载模型 ${profile.baseName} 失败`))
+    }
+    return false
+  }
+}
+
+const handleModelProfileChange = async (value: number | null) => {
+  if (value === null) return
+
+  const profile = modelProfiles.value.find(item => item.id === value)
+  if (!profile) return
+
+  if (!objectDetectionEnabled.value) {
+    ElMessage.success(`已选择模型 ${profile.baseName}，开启目标检测时自动加载`)
+    return
+  }
+
+  const applied = await applySelectedModelProfile(false)
+  if (applied) {
+    ElMessage.success(`模型已切换为 ${profile.baseName}`)
   }
 }
 
@@ -882,6 +1024,14 @@ const handleObjectDetectionToggle = async (enabled: string | number | boolean) =
   objectDetectionSettings.value.enabled = targetEnabled
 
   try {
+    if (targetEnabled) {
+      const modelApplied = await applySelectedModelProfile(false)
+      if (!modelApplied) {
+        setDetectionToggleState(previousEnabled)
+        return
+      }
+    }
+
     const endpoint = targetEnabled
       ? `/api/rknn/inference/on?track=${trackingEnabled.value ? 'true' : 'false'}&tracker=${encodeURIComponent(trackerBackend.value)}`
       : '/api/rknn/inference/off'
@@ -895,7 +1045,7 @@ const handleObjectDetectionToggle = async (enabled: string | number | boolean) =
       }
       ElMessage.success(
         targetEnabled
-          ? `目标检测已开启（跟踪${trackingEnabled.value ? '开启' : '关闭'}，${trackerBackendLabel(trackerBackend.value)}）`
+          ? `目标检测已开启（模型${selectedModelProfile.value?.baseName ?? '未命名'}，跟踪${trackingEnabled.value ? '开启' : '关闭'}，${trackerBackendLabel(trackerBackend.value)}）`
           : '目标检测已关闭'
       )
       localStorage.setItem('objectDetectionSettings', JSON.stringify(objectDetectionSettings.value))
@@ -1522,6 +1672,9 @@ onMounted(async () => {
   // 加载目标检测阈值设置
   loadThresholdSettings()
 
+  // 获取模型列表（用于开启推理前的模型与标签自动下发）
+  await fetchModelProfiles(true)
+
   // 检查并建立WebSocket连接
   await checkWebSocketConnection()
 
@@ -1664,8 +1817,11 @@ const refreshCameras = async () => {
   // 清空显示列表
   displayCameras.value = []
   
-  // 重新获取摄像头列表
-  await fetchCameras()
+  // 重新获取摄像头列表与模型列表
+  await Promise.all([
+    fetchCameras(),
+    fetchModelProfiles(true)
+  ])
 }
 
 // 格式化时间
@@ -2553,6 +2709,10 @@ const formatLastSentTime = (timestamp: number | null): string => {
 
     .tracker-select {
       width: 140px;
+    }
+
+    .model-select {
+      width: 220px;
     }
   }
 }

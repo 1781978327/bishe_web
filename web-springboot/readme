@@ -4,7 +4,11 @@
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 ./gradlew bootRun
 
-2. 使用预安装的 gradle：
+说明：
+- `./gradlew` 已默认指向项目内预装的 `/home/orangepi/Desktop/web/bishebeifen-master/web-springboot/gradle-8.14.1/bin/gradle`
+- 不需要再额外设置 `GRADLE_HOME`
+
+2. 直接使用预安装的 gradle：
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/gradle-8.14.1/bin/gradle bootRun
 

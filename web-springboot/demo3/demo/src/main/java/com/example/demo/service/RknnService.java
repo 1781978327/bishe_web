@@ -9,6 +9,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
@@ -127,6 +128,20 @@ public class RknnService {
         return normalized;
     }
 
+    private boolean parseBooleanLike(Object value) {
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof Number n) {
+            return n.intValue() != 0;
+        }
+        if (value instanceof String s) {
+            String normalized = s.trim().toLowerCase(Locale.ROOT);
+            return "true".equals(normalized) || "1".equals(normalized) || "on".equals(normalized);
+        }
+        return false;
+    }
+
     /**
      * 关闭推理
      */
@@ -145,6 +160,68 @@ public class RknnService {
             return Map.of("success", false, "error", "HTTP " + response.getStatusCode());
         } catch (RestClientException e) {
             log.error("关闭推理失败: {}", e.getMessage());
+            return Map.of("success", false, "error", e.getMessage());
+        }
+    }
+
+    /**
+     * 下发模型与标签文件到视觉服务：
+     * - 总是先调用 /api/inference/off?unload=1&model=...&labels=...
+     * - 若切换前推理开启，则自动按原跟踪状态重启推理
+     */
+    public Map<String, Object> applyModelAndLabel(String modelPath, String labelPath) {
+        try {
+            Map<String, Object> status = getStatus();
+            boolean inferenceWasEnabled = parseBooleanLike(status.get("inference_enabled"));
+            boolean trackerWasEnabled = parseBooleanLike(status.get("tracker_enabled"));
+            String trackerBackend = "bytetrack";
+            try {
+                String parsedTracker = normalizeTrackerBackend((String) status.get("tracker_backend"));
+                if (parsedTracker != null) {
+                    trackerBackend = parsedTracker;
+                }
+            } catch (IllegalArgumentException ignore) {
+                // 状态接口异常值时使用默认值
+            }
+
+            String offUrl = UriComponentsBuilder.fromHttpUrl(getApiUrl("/api/inference/off"))
+                    .queryParam("unload", 1)
+                    .queryParam("model", modelPath)
+                    .queryParam("labels", labelPath)
+                    .build()
+                    .encode()
+                    .toUriString();
+            ResponseEntity<Map> offResp = rknnServerRestTemplate.postForEntity(offUrl, null, Map.class);
+            if (!offResp.getStatusCode().is2xxSuccessful()) {
+                return Map.of("success", false, "error", "HTTP " + offResp.getStatusCode());
+            }
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("modelPath", modelPath);
+            result.put("labelPath", labelPath);
+            result.put("inferenceRestarted", inferenceWasEnabled);
+            result.put("offResult", offResp.getBody());
+
+            if (inferenceWasEnabled) {
+                String onUrl = UriComponentsBuilder.fromHttpUrl(getApiUrl("/api/inference/on"))
+                        .queryParam("track", trackerWasEnabled ? 1 : 0)
+                        .queryParam("tracker", trackerBackend)
+                        .queryParam("model", modelPath)
+                        .queryParam("labels", labelPath)
+                        .build()
+                        .encode()
+                        .toUriString();
+                ResponseEntity<Map> onResp = rknnServerRestTemplate.postForEntity(onUrl, null, Map.class);
+                if (!onResp.getStatusCode().is2xxSuccessful()) {
+                    return Map.of("success", false, "error", "HTTP " + onResp.getStatusCode());
+                }
+                result.put("onResult", onResp.getBody());
+            }
+
+            result.put("success", true);
+            return result;
+        } catch (RestClientException e) {
+            log.error("下发模型与标签失败: {}", e.getMessage());
             return Map.of("success", false, "error", e.getMessage());
         }
     }
@@ -479,6 +556,12 @@ public class RknnService {
      */
     public Map<String, Object> saveForbiddenArea(ForbiddenAreaSaveRequest request) {
         validateForbiddenAreaRequest(request);
+        if (isForbiddenAreaCleared(request)) {
+            forbiddenAreaStore.remove(request.getCameraId());
+            log.info("禁入区域已清空: cameraId={}", request.getCameraId());
+            return buildEmptyForbiddenAreaResponse(request.getCameraId());
+        }
+
         ForbiddenAreaSaveRequest copy = deepCopyForbiddenArea(request);
         forbiddenAreaStore.put(copy.getCameraId(), copy);
         log.info("禁入区域已保存: cameraId={}, points={}", copy.getCameraId(), copy.getPoints());
@@ -494,12 +577,7 @@ public class RknnService {
         }
         ForbiddenAreaSaveRequest saved = forbiddenAreaStore.get(cameraId);
         if (saved == null) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("exists", false);
-            result.put("cameraId", cameraId);
-            result.put("pointCount", 0);
-            result.put("points", List.of());
-            return result;
+            return buildEmptyForbiddenAreaResponse(cameraId);
         }
         return toForbiddenAreaResponse(saved, true);
     }
@@ -515,18 +593,22 @@ public class RknnService {
         if (cameraId != 1L && cameraId != 2L) {
             throw new IllegalArgumentException("cameraId 仅支持 1 或 2");
         }
-        if (request.getPoints() == null || request.getPoints().size() != 4) {
-            throw new IllegalArgumentException("points 必须是 4 个端点");
-        }
-
         int width = request.getImageWidth() == null ? 0 : request.getImageWidth();
         int height = request.getImageHeight() == null ? 0 : request.getImageHeight();
         if (width < 0 || height < 0) {
             throw new IllegalArgumentException("imageWidth/imageHeight 不能为负数");
         }
 
-        for (int i = 0; i < request.getPoints().size(); i++) {
-            ForbiddenAreaPoint point = request.getPoints().get(i);
+        List<ForbiddenAreaPoint> points = request.getPoints();
+        if (points == null || points.isEmpty()) {
+            return;
+        }
+        if (points.size() != 4) {
+            throw new IllegalArgumentException("points 必须是 4 个端点，或传空数组表示清空");
+        }
+
+        for (int i = 0; i < points.size(); i++) {
+            ForbiddenAreaPoint point = points.get(i);
             if (point == null || point.getX() == null || point.getY() == null) {
                 throw new IllegalArgumentException("第 " + (i + 1) + " 个点坐标无效");
             }
@@ -549,7 +631,8 @@ public class RknnService {
         copy.setImageHeight(request.getImageHeight());
 
         List<ForbiddenAreaPoint> copiedPoints = new ArrayList<>();
-        for (ForbiddenAreaPoint point : request.getPoints()) {
+        List<ForbiddenAreaPoint> sourcePoints = request.getPoints() == null ? List.of() : request.getPoints();
+        for (ForbiddenAreaPoint point : sourcePoints) {
             ForbiddenAreaPoint copied = new ForbiddenAreaPoint();
             copied.setX(point.getX());
             copied.setY(point.getY());
@@ -561,7 +644,8 @@ public class RknnService {
 
     private Map<String, Object> toForbiddenAreaResponse(ForbiddenAreaSaveRequest request, boolean exists) {
         List<Map<String, Integer>> points = new ArrayList<>();
-        for (ForbiddenAreaPoint point : request.getPoints()) {
+        List<ForbiddenAreaPoint> sourcePoints = request.getPoints() == null ? List.of() : request.getPoints();
+        for (ForbiddenAreaPoint point : sourcePoints) {
             Map<String, Integer> p = new LinkedHashMap<>();
             p.put("x", point.getX());
             p.put("y", point.getY());
@@ -575,6 +659,19 @@ public class RknnService {
         result.put("imageHeight", request.getImageHeight());
         result.put("pointCount", points.size());
         result.put("points", points);
+        return result;
+    }
+
+    private boolean isForbiddenAreaCleared(ForbiddenAreaSaveRequest request) {
+        return request.getPoints() == null || request.getPoints().isEmpty();
+    }
+
+    private Map<String, Object> buildEmptyForbiddenAreaResponse(Long cameraId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("exists", false);
+        result.put("cameraId", cameraId);
+        result.put("pointCount", 0);
+        result.put("points", List.of());
         return result;
     }
 }

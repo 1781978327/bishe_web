@@ -277,14 +277,14 @@
             <el-button
               size="small"
               type="primary"
-              :disabled="forbiddenPoints.length !== 4"
+              :disabled="forbiddenPoints.length !== 0 && forbiddenPoints.length !== 4"
               @click="saveForbiddenArea"
             >
-              提交四边形到后端
+              提交到后端
             </el-button>
           </div>
         </div>
-        <div class="forbidden-tip">请按顺时针在图片上点击 4 个点形成四边形，点位会以原图坐标提交到后端。</div>
+        <div class="forbidden-tip">请按顺时针在图片上点击 4 个点形成四边形；清空点位后提交可关闭禁入判断。</div>
 
         <div class="forbidden-points">
           <span v-for="(p, idx) in forbiddenPoints" :key="idx" class="forbidden-point-chip">
@@ -925,8 +925,8 @@ const handleForbiddenImageClick = (event: MouseEvent) => {
 }
 
 const saveForbiddenArea = async () => {
-  if (forbiddenPoints.value.length !== 4) {
-    ElMessage.warning('请先在图片上选择 4 个点')
+  if (forbiddenPoints.value.length !== 0 && forbiddenPoints.value.length !== 4) {
+    ElMessage.warning('请先在图片上选择 4 个点，或清空后提交')
     return
   }
 
@@ -944,7 +944,11 @@ const saveForbiddenArea = async () => {
     })
     const data = await res.json()
     if (data.code === 200) {
-      ElMessage.success('禁入区域已提交到后端')
+      if (forbiddenPoints.value.length === 0) {
+        ElMessage.success('禁入区域已清空，已关闭禁入判断')
+      } else {
+        ElMessage.success('禁入区域已提交到后端')
+      }
     } else {
       ElMessage.error(data.msg || '保存禁入区域失败')
     }

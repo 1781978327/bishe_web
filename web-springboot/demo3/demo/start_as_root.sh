@@ -17,5 +17,13 @@ fi
 echo "以root用户运行，开始启动后端..."
 cd "$SCRIPT_DIR"
 
-# 使用gradle以root权限启动
-/home/orangepi/Desktop/web/web-springboot/gradle-8.14.1/bin/gradle bootRun
+# 默认使用项目内预装的 Gradle
+WEB_SPRINGBOOT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOCAL_GRADLE="$WEB_SPRINGBOOT_ROOT/gradle-8.14.1/bin/gradle"
+
+if [ ! -x "$LOCAL_GRADLE" ]; then
+    echo "未找到项目内预装 Gradle: $LOCAL_GRADLE"
+    exit 1
+fi
+
+exec "$LOCAL_GRADLE" bootRun

@@ -107,9 +107,9 @@ public class DetectionRecordController {
 
     /**
      * 根据事件类型筛选记录（三大类）
-     * video: 监控异常 (fall, fight, knife)
+     * video: 监控异常 (fall, fight, knife, env_intrusion)
      * sound: 声音异常 (sound_*)
-     * env: 环境异常 (env_*)
+     * env: 环境异常 (env_*，不含 env_intrusion)
      */
     private Page<DetectionRecord> filterByEventType(String eventType, Pageable pageable) {
         return switch (eventType) {

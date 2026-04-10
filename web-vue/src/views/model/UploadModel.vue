@@ -7,10 +7,12 @@
           <span>上传模型</span>
         </div>
       </template>
+
       <p class="hint">
-        同时上传 <code>.rknn</code> 模型文件和对应的 <code>.yaml</code> 配置文件，两者须保持相同的文件名（扩展名不同）。
-        文件保存到 <code>uploads/models/用户名/</code> 目录。
+        同时上传 <code>.rknn</code> 模型文件和对应的 <code>.txt</code> 标签文件，两者须保持同名（扩展名不同）。
+        上传后会自动建立模型与标签关联，选择模型时后端会自动把模型和标签下发给视觉服务。
       </p>
+
       <el-upload
         ref="uploadRef"
         class="model-uploader"
@@ -19,28 +21,27 @@
         :limit="2"
         :on-change="handleFileChange"
         :on-exceed="handleExceed"
-        accept=".rknn,.yaml"
+        accept=".rknn,.txt"
         multiple
       >
         <el-icon class="upload-icon"><UploadFilled /></el-icon>
         <div class="el-upload__text">
-          将 <strong>.rknn</strong> 和 <strong>.yaml</strong> 文件拖到此处，或<em>点击选择</em>
+          将 <strong>.rknn</strong> 和 <strong>.txt</strong> 文件拖到此处，或<em>点击选择</em>
         </div>
         <template #tip>
           <div class="el-upload__tip">
-            最多 2 个文件，扩展名限 .rknn / .yaml，单文件不超过 200MB，两者必须同名（basename 相同）
+            最多 2 个文件，扩展名限 .rknn / .txt，单文件不超过 200MB，两者必须同名（basename 相同）
           </div>
         </template>
       </el-upload>
 
-      <!-- 待上传文件列表 -->
       <div v-if="pendingFiles.length" class="file-list">
         <div class="file-list-title">待上传文件：</div>
         <div v-for="(f, i) in pendingFiles" :key="i" class="file-item">
           <el-icon><Document /></el-icon>
           <span>{{ f.name }}</span>
-          <el-tag :type="f.name.endsWith('.rknn') ? 'primary' : 'success'" size="small">
-            {{ f.name.endsWith('.rknn') ? '模型' : '配置' }}
+          <el-tag :type="f.name.toLowerCase().endsWith('.rknn') ? 'primary' : 'success'" size="small">
+            {{ f.name.toLowerCase().endsWith('.rknn') ? '模型' : '标签' }}
           </el-tag>
         </div>
         <div class="actions">
@@ -49,7 +50,6 @@
         </div>
       </div>
 
-      <!-- 上传结果 -->
       <div v-if="results.length" class="results">
         <el-alert
           v-for="(r, i) in results"
@@ -70,7 +70,6 @@
         </el-alert>
       </div>
 
-      <!-- 错误提示 -->
       <el-alert
         v-if="errorMsg"
         type="error"
@@ -82,18 +81,67 @@
         {{ errorMsg }}
       </el-alert>
     </el-card>
+
+    <el-card shadow="hover" class="main-card model-table-card">
+      <template #header>
+        <div class="table-header">
+          <span>已上传模型</span>
+          <el-button size="small" @click="loadModelProfiles" :loading="loadingModels">刷新</el-button>
+        </div>
+      </template>
+
+      <el-table :data="modelProfiles" v-loading="loadingModels" empty-text="暂无模型，请先上传">
+        <el-table-column prop="baseName" label="模型名" min-width="180" />
+        <el-table-column label=".rknn" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.modelObjectKey" type="success" size="small">已上传</el-tag>
+            <el-tag v-else type="info" size="small">缺失</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label=".txt" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.labelObjectKey" type="success" size="small">已上传</el-tag>
+            <el-tag v-else type="info" size="small">缺失</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.ready" type="success" size="small">可切换</el-tag>
+            <el-tag v-else type="warning" size="small">不完整</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" align="center">
+          <template #default="{ row }">
+            <el-button
+              v-if="!row.selected"
+              type="primary"
+              size="small"
+              :disabled="!row.ready"
+              :loading="selectingModelId === row.id"
+              @click="handleSelectModel(row)"
+            >
+              设为当前
+            </el-button>
+            <el-tag v-else type="success" size="small">当前模型</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { UploadInstance, UploadProps, UploadUserFile } from 'element-plus'
 import { UploadFilled, Document } from '@element-plus/icons-vue'
 import { fileRequest } from '@/api/file_request'
 import { useUserStore } from '@/stores/user'
+import { listModelProfiles, selectModelProfile, type ModelProfile } from '@/api/model'
 
 const MODEL_BUCKET = 'models'
+const ALLOWED_EXT = new Set(['.rknn', '.txt'])
+const MAX_MODEL_FILE_SIZE = 200 * 1024 * 1024
 
 const uploadRef = ref<UploadInstance>()
 const pendingFiles = ref<UploadUserFile[]>([])
@@ -102,16 +150,16 @@ const results = ref<{ name: string; url: string }[]>([])
 const errorMsg = ref('')
 const userStore = useUserStore()
 
-const ALLOWED_EXT = new Set(['.rknn', '.yaml'])
-const MAX_MODEL_FILE_SIZE = 200 * 1024 * 1024
+const modelProfiles = ref<ModelProfile[]>([])
+const loadingModels = ref(false)
+const selectingModelId = ref<number | null>(null)
 
-/** 从文件名中提取 basename（不含扩展名） */
 const getBaseName = (filename: string): string => {
   const lastDot = filename.lastIndexOf('.')
   return lastDot > 0 ? filename.substring(0, lastDot) : filename
 }
 
-const handleFileChange: UploadProps['onChange'] = (uploadFile, uploadFiles) => {
+const handleFileChange: UploadProps['onChange'] = (_uploadFile, uploadFiles) => {
   errorMsg.value = ''
 
   const oversized = uploadFiles.find(f => (f.size || 0) > MAX_MODEL_FILE_SIZE)
@@ -123,31 +171,24 @@ const handleFileChange: UploadProps['onChange'] = (uploadFile, uploadFiles) => {
     return
   }
 
-  // 过滤掉非 rknn / yaml 的文件
-  const valid = uploadFiles.filter(f => {
-    const name = f.name || ''
-    const ext = '.' + name.split('.').pop()?.toLowerCase()
-    return ALLOWED_EXT.has(ext)
-  })
-
-  // 检查是否有非法后缀
   const invalid = uploadFiles.find(f => {
     const name = f.name || ''
     const ext = '.' + name.split('.').pop()?.toLowerCase()
     return !ALLOWED_EXT.has(ext)
   })
   if (invalid) {
-    ElMessage.error(`不支持 ${invalid.name}，仅允许 .rknn 或 .yaml 文件`)
+    ElMessage.error(`不支持 ${invalid.name}，仅允许 .rknn 或 .txt 文件`)
     uploadRef.value?.clearFiles()
+    pendingFiles.value = []
     return
   }
 
-  pendingFiles.value = valid
+  pendingFiles.value = uploadFiles
   results.value = []
 }
 
 const handleExceed: UploadProps['onExceed'] = () => {
-  ElMessage.warning('最多只能上传 2 个文件（.rknn + .yaml）')
+  ElMessage.warning('最多只能上传 2 个文件（.rknn + .txt）')
 }
 
 const clearFiles = () => {
@@ -162,49 +203,35 @@ const submitUpload = async () => {
   }
 
   if (pendingFiles.value.length < 2) {
-    ElMessage.warning('请同时上传 .rknn 和 .yaml 两个文件')
+    ElMessage.warning('请同时上传 .rknn 和 .txt 两个文件')
     return
   }
 
-  // 调试：打印文件信息
-  console.log('pendingFiles:', pendingFiles.value)
-
-  // 获取文件对象 - Element Plus 使用 raw 属性存储实际 File 对象
-  // 需要检查 file.size (UI显示的) 和 raw.size (实际的) 两个值
   const files: File[] = []
   for (const f of pendingFiles.value) {
-    // 优先使用 raw，如果 raw 不存在或无效，则尝试 f 本身
     const rawFile = f.raw
     const targetFile = (rawFile && rawFile.size > 0) ? rawFile : f
     const fileSize = (targetFile as File).size
-
     if (fileSize > 0) {
       files.push(targetFile as File)
-    } else {
-      console.warn('文件为空或无效:', f.name, { rawSize: rawFile?.size, fSize: fileSize })
     }
   }
 
-  console.log('processed files:', files)
-  console.log('file sizes:', files.map(f => f.size))
-
-  if (files.length === 0) {
+  if (files.length !== 2) {
     ElMessage.error('文件数据无效，请重新选择')
     return
   }
-  const names = files.map(f => f.name)
 
-  // 检查 basename 是否一致
+  const names = files.map(f => f.name)
   const bases = names.map(getBaseName)
   if (bases[0] !== bases[1]) {
     errorMsg.value = `文件名不一致：${names[0]} 与 ${names[1]} 的 basename 必须相同`
     return
   }
 
-  // 检查扩展名是否齐全且不同
   const exts = names.map(n => '.' + n.split('.').pop()?.toLowerCase())
-  if (!exts.includes('.rknn') || !exts.includes('.yaml')) {
-    errorMsg.value = '必须同时包含一个 .rknn 文件和一个 .yaml 文件'
+  if (!exts.includes('.rknn') || !exts.includes('.txt')) {
+    errorMsg.value = '必须同时包含一个 .rknn 文件和一个 .txt 文件'
     return
   }
 
@@ -213,10 +240,7 @@ const submitUpload = async () => {
   errorMsg.value = ''
 
   try {
-    // 获取当前用户名
     const username = userStore.userInfo?.username || 'default'
-
-    // 两个文件串行上传（也可改为 Promise.all 并行）
     const uploaded: { name: string; url: string }[] = []
     for (const file of files) {
       const data = await fileRequest.upload(MODEL_BUCKET, file, false, username)
@@ -226,10 +250,39 @@ const submitUpload = async () => {
     ElMessage.success('上传成功')
     uploadRef.value?.clearFiles()
     pendingFiles.value = []
+    await loadModelProfiles()
   } catch {
-    // 错误已在拦截器中提示
+    // 错误已由拦截器处理
   } finally {
     uploading.value = false
+  }
+}
+
+const loadModelProfiles = async () => {
+  loadingModels.value = true
+  try {
+    modelProfiles.value = await listModelProfiles()
+  } catch {
+    // 错误已由拦截器处理
+  } finally {
+    loadingModels.value = false
+  }
+}
+
+const handleSelectModel = async (profile: ModelProfile) => {
+  if (!profile.ready) {
+    ElMessage.warning('该模型缺少 .rknn 或 .txt 文件，无法切换')
+    return
+  }
+  selectingModelId.value = profile.id
+  try {
+    await selectModelProfile(profile.id)
+    ElMessage.success(`已切换到模型：${profile.baseName}`)
+    await loadModelProfiles()
+  } catch {
+    // 错误已由拦截器处理
+  } finally {
+    selectingModelId.value = null
   }
 }
 
@@ -242,11 +295,18 @@ const copyUrl = async (url: string) => {
     ElMessage.info(full)
   }
 }
+
+onMounted(() => {
+  loadModelProfiles()
+})
 </script>
 
 <style scoped>
 .upload-model-page {
-  max-width: 720px;
+  max-width: 920px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .main-card {
@@ -365,5 +425,17 @@ const copyUrl = async (url: string) => {
 
 .error-alert {
   margin-top: 16px;
+}
+
+.model-table-card :deep(.el-card__header) {
+  padding-bottom: 12px;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  color: #0f172a;
 }
 </style>

@@ -42,7 +42,7 @@ export interface DetectionRecordQueryParams {
   startTime?: string
   endTime?: string
   processed?: number
-  /** 事件类型：video/video异常/video打架/video持刀, sound/声音异常/声音尖叫/声音玻璃破碎/声音打斗, env/环境异常 */
+  /** 事件类型：video(含异常闯入 env_intrusion), sound(声音异常), env(环境异常，不含异常闯入) */
   eventType?: string
 }
 
