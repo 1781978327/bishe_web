@@ -92,6 +92,7 @@ public class SoundService {
     }
 
     public Map<String, Object> getMonitoringStatus() {
+        syncMonitoringEnabledFromRealtimeStatus();
         Map<String, Object> status = new HashMap<>();
         status.put("httpServerAvailable", httpServerAvailable.get());
         status.put("httpServerUrl", String.format("http://%s:%d", soundServerHost, soundServerPort));
@@ -250,27 +251,20 @@ public class SoundService {
             int responseCode = conn.getResponseCode();
             log.info("[SoundService] 实时监测响应码: {}", responseCode);
 
-            // 读取响应
-            StringBuilder response = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-            }
-            log.info("[SoundService] 实时监测响应: {}", response.toString());
+            String responseBody = readConnectionBody(conn);
+            log.info("[SoundService] 实时监测响应: {}", responseBody);
 
             if (responseCode == 200) {
                 log.info("[SoundService] ✓ 实时监测已启动");
                 monitoringEnabled.set(true);
                 return true;
-            } else if (responseCode == 409 || response.toString().contains("Already running")) {
+            } else if (responseCode == 409 || responseBody.contains("Already running")) {
                 // 已经是运行状态，视为成功（幂等性）
                 log.info("[SoundService] ✓ 实时监测已在运行中");
                 monitoringEnabled.set(true);
                 return true;
             } else {
-                log.error("[SoundService] ✗ 启动实时监测失败: {}", response.toString());
+                log.error("[SoundService] ✗ 启动实时监测失败: {}", responseBody);
                 return false;
             }
         } catch (Exception e) {
@@ -305,6 +299,7 @@ public class SoundService {
                 monitoringEnabled.set(false);
                 return true;
             } else {
+                syncMonitoringEnabledFromRealtimeStatus();
                 return false;
             }
         } catch (Exception e) {
@@ -332,17 +327,15 @@ public class SoundService {
 
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
-                StringBuilder response = new StringBuilder();
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        response.append(line);
-                    }
-                }
+                String response = readConnectionBody(conn);
                 com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                Map<String, Object> result = mapper.readValue(response.toString(), Map.class);
+                Map<String, Object> result = mapper.readValue(response, Map.class);
                 status.put("realtime", result);
                 status.put("success", true);
+                Object running = result.get("running");
+                if (running instanceof Boolean runningFlag) {
+                    monitoringEnabled.set(runningFlag);
+                }
             } else {
                 status.put("success", false);
                 status.put("error", "获取状态失败");
@@ -373,15 +366,9 @@ public class SoundService {
 
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
-                StringBuilder response = new StringBuilder();
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        response.append(line);
-                    }
-                }
+                String response = readConnectionBody(conn);
                 com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                Map<String, Object> eventsResult = mapper.readValue(response.toString(), Map.class);
+                Map<String, Object> eventsResult = mapper.readValue(response, Map.class);
                 result.put("events", eventsResult.get("events"));
                 result.put("count", eventsResult.get("count"));
                 result.put("success", true);
@@ -444,6 +431,63 @@ public class SoundService {
         } catch (Exception e) {
             log.error("上报声音异常到安全记录失败: {}", e.getMessage());
             e.printStackTrace();
+        }
+    }
+
+    private void syncMonitoringEnabledFromRealtimeStatus() {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(String.format("http://%s:%d/realtime/status", soundServerHost, soundServerPort));
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(3000);
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) {
+                return;
+            }
+
+            String response = readConnectionBody(conn);
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            Map<String, Object> result = mapper.readValue(response, Map.class);
+            Object running = result.get("running");
+            if (running instanceof Boolean runningFlag) {
+                monitoringEnabled.set(runningFlag);
+            }
+        } catch (Exception e) {
+            log.debug("[SoundService] 同步实时状态失败: {}", e.getMessage());
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    private String readConnectionBody(HttpURLConnection conn) throws IOException {
+        InputStream stream = null;
+        try {
+            stream = conn.getErrorStream();
+            if (stream == null) {
+                stream = conn.getInputStream();
+            }
+            if (stream == null) {
+                return "";
+            }
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
+                }
+                return response.toString();
+            }
+        } catch (IOException e) {
+            if (stream != null) {
+                throw e;
+            }
+            return "";
         }
     }
 }

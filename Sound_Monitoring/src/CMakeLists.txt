@@ -37,6 +37,7 @@ add_executable(${PROJECT_NAME}
 # HTTP API 服务器版本
 add_executable(${PROJECT_NAME}_http
     main_http.cc
+    asr_vosk.cc
     audio_capture.c
     process.cc
     ${rknpu_yamnet_file}

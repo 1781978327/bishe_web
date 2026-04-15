@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_DIR="$ROOT_DIR/.runtime"
+PID_DIR="$RUNTIME_DIR/pids"
+LOG_DIR="$RUNTIME_DIR/logs"
+
+FRONTEND_DIR="$ROOT_DIR/web-vue"
+BACKEND_DIR="$ROOT_DIR/web-springboot/demo3/demo"
+SENSOR_DIR="$ROOT_DIR/Hardware"
+SOUND_DIR="$ROOT_DIR/Sound_Monitoring/build"
+VISION_DIR="$ROOT_DIR/yolov8-rk3588-cpp-3-15/build_release"
+SUDO_PASSWORD="orangepi"
+DEFAULT_CAM0_SOURCE="/dev/v4l/by-path/platform-fc800000.usb-usb-0:1:1.0-video-index0"
+DEFAULT_CAM1_SOURCE="/dev/v4l/by-path/platform-fc880000.usb-usb-0:1:1.0-video-index0"
+
+mkdir -p "$PID_DIR" "$LOG_DIR"
+
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+fi
+
+require_file() {
+  local path="$1"
+  if [[ ! -e "$path" ]]; then
+    echo "缺少文件或目录: $path" >&2
+    exit 1
+  fi
+}
+
+require_cmd() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "缺少命令: $cmd" >&2
+    exit 1
+  fi
+}
+
+require_file "$FRONTEND_DIR/package.json"
+require_file "$BACKEND_DIR/gradlew"
+require_file "$SENSOR_DIR/sensor_reader_http"
+require_file "$SOUND_DIR/rknn_yamnet_demo_http"
+require_file "$VISION_DIR/rknn_http_ctrl"
+
+require_cmd bash
+require_cmd nohup
+require_cmd npm
+require_cmd sudo
+
+if (( DRY_RUN == 0 )) && [[ "${EUID}" -ne 0 ]]; then
+  echo "正在自动输入 sudo 密码，用于启动三个硬件/算法服务..."
+  printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' -v
+fi
+
+declare -A SERVICE_PID=()
+declare -A SERVICE_STATE=()
+declare -A SERVICE_LOG=()
+
+is_running_pid() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] && [[ "$pid" =~ ^[0-9]+$ ]] && [[ -d "/proc/$pid" ]]
+}
+
+existing_pid_from_file() {
+  local pidfile="$1"
+  if [[ -f "$pidfile" ]]; then
+    local pid
+    pid="$(tr -d '[:space:]' < "$pidfile" 2>/dev/null || true)"
+    if is_running_pid "$pid"; then
+      printf '%s' "$pid"
+      return 0
+    fi
+    rm -f "$pidfile"
+  fi
+  return 1
+}
+
+wait_for_pidfile() {
+  local pidfile="$1"
+  local tries=50
+  local pid=""
+  for ((i=0; i<tries; i++)); do
+    if [[ -f "$pidfile" ]]; then
+      pid="$(tr -d '[:space:]' < "$pidfile" 2>/dev/null || true)"
+      if [[ -n "$pid" ]]; then
+        printf '%s' "$pid"
+        return 0
+      fi
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+run_kill() {
+  local signal="$1"
+  local pid="$2"
+  local mode="$3"
+
+  if [[ "$mode" == "sudo" ]]; then
+    sudo -n kill "-$signal" "$pid" 2>/dev/null || true
+  else
+    kill "-$signal" "$pid" 2>/dev/null || true
+  fi
+}
+
+stop_service_if_running() {
+  local name="$1"
+  local mode="$2"
+  local pidfile="$PID_DIR/${name}.pid"
+  local pid=""
+
+  if [[ -f "$pidfile" ]]; then
+    pid="$(tr -d '[:space:]' < "$pidfile" 2>/dev/null || true)"
+  fi
+
+  if ! is_running_pid "$pid"; then
+    rm -f "$pidfile"
+    return 0
+  fi
+
+  echo "[$name] 发现旧进程，先重启以应用最新配置 (PID=$pid)"
+  run_kill TERM "$pid" "$mode"
+  for ((i=0; i<20; i++)); do
+    if ! is_running_pid "$pid"; then
+      rm -f "$pidfile"
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  echo "[$name] 旧进程未退出，发送 SIGKILL"
+  run_kill KILL "$pid" "$mode"
+  for ((i=0; i<10; i++)); do
+    if ! is_running_pid "$pid"; then
+      rm -f "$pidfile"
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  echo "[$name] 警告：旧进程可能仍未退出 (PID=$pid)" >&2
+  rm -f "$pidfile"
+}
+
+cleanup_vision_residuals() {
+  echo "[vision_http] 清理残留的视觉服务进程..."
+  sudo -n pkill -f 'rknn_http_ctrl' 2>/dev/null || true
+  sudo -n pkill -f 'mediamtx' 2>/dev/null || true
+  sleep 1
+}
+
+resolve_camera_source() {
+  local env_value="$1"
+  local preferred_path="$2"
+  local fallback_a="$3"
+  local fallback_b="$4"
+
+  if [[ -n "$env_value" ]]; then
+    printf '%s' "$env_value"
+    return 0
+  fi
+
+  if [[ -e "$preferred_path" ]]; then
+    printf '%s' "$preferred_path"
+    return 0
+  fi
+
+  if [[ -e "$fallback_a" ]]; then
+    printf '%s' "$fallback_a"
+    return 0
+  fi
+
+  printf '%s' "$fallback_b"
+}
+
+discover_secondary_camera_source() {
+  local primary_source="$1"
+  local candidate
+
+  shopt -s nullglob
+  for candidate in /dev/v4l/by-path/*video-index0; do
+    if [[ "$candidate" != "$primary_source" ]] && [[ -e "$candidate" ]]; then
+      printf '%s' "$candidate"
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+
+  if [[ -e "/dev/video2" ]]; then
+    printf '%s' "/dev/video2"
+    return 0
+  fi
+
+  if [[ -e "/dev/video3" ]]; then
+    printf '%s' "/dev/video3"
+    return 0
+  fi
+
+  printf '%s' "/dev/video2"
+}
+
+start_service() {
+  local name="$1"
+  local mode="$2"
+  local workdir="$3"
+  local cmd="$4"
+  local pidfile="$PID_DIR/${name}.pid"
+  local logfile="$LOG_DIR/${name}.log"
+
+  SERVICE_LOG["$name"]="$logfile"
+
+  local existing_pid=""
+  if existing_pid="$(existing_pid_from_file "$pidfile")"; then
+    SERVICE_PID["$name"]="$existing_pid"
+    SERVICE_STATE["$name"]="already-running"
+    echo "[$name] 已在运行，PID=$existing_pid"
+    return 0
+  fi
+
+  local launch_script
+  launch_script="cd '$workdir' && nohup bash -lc 'exec $cmd' > '$logfile' 2>&1 < /dev/null & echo \$! > '$pidfile'"
+
+  if (( DRY_RUN )); then
+    echo "[dry-run][$name][$mode] $launch_script"
+    SERVICE_STATE["$name"]="dry-run"
+    return 0
+  fi
+
+  rm -f "$pidfile"
+  if [[ "$mode" == "sudo" ]]; then
+    sudo -n bash -lc "$launch_script"
+  else
+    bash -lc "$launch_script"
+  fi
+
+  local pid=""
+  if ! pid="$(wait_for_pidfile "$pidfile")"; then
+    echo "[$name] 启动失败：未生成 PID 文件 $pidfile" >&2
+    echo "[$name] 日志：$logfile" >&2
+    exit 1
+  fi
+
+  if ! is_running_pid "$pid"; then
+    echo "[$name] 启动失败：进程未存活，PID=$pid" >&2
+    echo "[$name] 日志：$logfile" >&2
+    tail -n 40 "$logfile" 2>/dev/null || true
+    exit 1
+  fi
+
+  SERVICE_PID["$name"]="$pid"
+  SERVICE_STATE["$name"]="started"
+  echo "[$name] 已启动，PID=$pid"
+}
+
+start_service "frontend" "user" "$FRONTEND_DIR" "npm run dev -- --host 0.0.0.0"
+start_service "backend" "user" "$BACKEND_DIR" "./gradlew bootRun"
+start_service "sensor_http" "sudo" "$SENSOR_DIR" "./sensor_reader_http"
+start_service "sound_http" "sudo" "$SOUND_DIR" "env LD_LIBRARY_PATH=./lib:\$LD_LIBRARY_PATH RT_PRINT_WINDOW=1 ./rknn_yamnet_demo_http 8089"
+
+CAM0_SOURCE="$(resolve_camera_source "${CAM0_SOURCE:-}" "$DEFAULT_CAM0_SOURCE" "/dev/video0" "/dev/video0")"
+if [[ -n "${CAM1_SOURCE:-}" ]]; then
+  CAM1_SOURCE="$CAM1_SOURCE"
+else
+  CAM1_SOURCE="$(resolve_camera_source "" "$DEFAULT_CAM1_SOURCE" "$(discover_secondary_camera_source "$CAM0_SOURCE")" "/dev/video2")"
+fi
+
+echo "视觉服务摄像头源："
+echo "  cam0 -> $CAM0_SOURCE"
+echo "  cam1 -> $CAM1_SOURCE"
+
+stop_service_if_running "vision_http" "sudo"
+cleanup_vision_residuals
+start_service "vision_http" "sudo" "$VISION_DIR" "./rknn_http_ctrl --cam0-source $CAM0_SOURCE --cam1-source $CAM1_SOURCE"
+
+echo
+echo "================ PID Summary ================"
+for name in frontend backend sensor_http sound_http vision_http; do
+  printf '%-12s state=%-16s pid=%-8s log=%s\n' \
+    "$name" \
+    "${SERVICE_STATE[$name]:-unknown}" \
+    "${SERVICE_PID[$name]:--}" \
+    "${SERVICE_LOG[$name]:--}"
+done
+echo "============================================="
+
+echo
+echo "端口参考："
+echo "  frontend    -> 3000"
+echo "  backend     -> 8080"
+echo "  sensor_http -> 8088"
+echo "  sound_http  -> 8089"
+echo "  vision_http -> 8091"
+
+if (( DRY_RUN == 0 )); then
+  echo
+  echo "可用下面命令快速确认："
+  echo "  ss -ltnp | grep -E '3000|8080|8088|8089|8091'"
+fi

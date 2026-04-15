@@ -308,8 +308,8 @@ int main(int argc, char **argv)
     printf("[INFO] Press Ctrl+C to stop\n\n");
 
     ResultEntry result[TOP_N];
-    int frames_per_chunk = sample_rate * CHUNK_DURATION_SEC;
-    int frames_per_hop = sample_rate * HOP_SEC;
+    int frames_per_chunk = (int)(sample_rate * CHUNK_DURATION_SEC);
+    int frames_per_hop = (int)(sample_rate * HOP_SEC);
     double start_time = get_timestamp();
     int total_chunks = 0;
     int anomaly_count = 0;
@@ -319,11 +319,19 @@ int main(int argc, char **argv)
         // 读取音频数据
         int got = capture_read(cap, frames_per_hop, 1000);
         if (got > 0) {
+            float *all_data = capture_get_data(cap);
+            int total_frames = capture_get_frames(cap);
+            int start = total_frames - got;
+            if (!all_data || start < 0) {
+                continue;
+            }
+            float *latest_chunk = all_data + start;
+
             // 将数据放入环形缓冲区
-            ring_push(&g_ring, capture_get_data(cap), got);
+            ring_push(&g_ring, latest_chunk, got);
             // 保存原始音频
             if (g_save_raw && g_raw_count + got <= g_raw_capacity) {
-                memcpy(g_raw_audio + g_raw_count, capture_get_data(cap), got * sizeof(float));
+                memcpy(g_raw_audio + g_raw_count, latest_chunk, got * sizeof(float));
                 g_raw_count += got;
             }
         }

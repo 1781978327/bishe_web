@@ -217,7 +217,61 @@ static cv::Scalar tracker_color_from_label(int label) {
     return cv::Scalar(b, g, r);
 }
 
+static std::string trim_ascii_space(const std::string& text) {
+    size_t begin = 0;
+    while (begin < text.size() && std::isspace((unsigned char)text[begin])) {
+        ++begin;
+    }
+    size_t end = text.size();
+    while (end > begin && std::isspace((unsigned char)text[end - 1])) {
+        --end;
+    }
+    return text.substr(begin, end - begin);
+}
+
+static bool has_ascii_token(const std::string& text, const std::string& token) {
+    if (text.empty() || token.empty()) return false;
+    size_t pos = 0;
+    while (true) {
+        pos = text.find(token, pos);
+        if (pos == std::string::npos) return false;
+        size_t left = pos;
+        size_t right = pos + token.size();
+        bool left_ok = (left == 0) || !std::isalnum((unsigned char)text[left - 1]);
+        bool right_ok = (right >= text.size()) || !std::isalnum((unsigned char)text[right]);
+        if (left_ok && right_ok) return true;
+        pos = right;
+    }
+}
+
+static bool tracker_label_is_person(int label) {
+    if (label < 0) return false;
+    if (coco_labels.empty()) return label == 0;
+    if (label >= (int)coco_labels.size()) return false;
+
+    const std::string raw_name = trim_ascii_space(coco_labels[label]);
+    const std::string normalized = trim_ascii_space(normalize_tracker_backend_name(raw_name));
+    if (has_ascii_token(normalized, "person") ||
+        has_ascii_token(normalized, "human") ||
+        has_ascii_token(normalized, "pedestrian")) {
+        return true;
+    }
+
+    // 中文标签采用精确匹配，避免把“人群/工人/行人通道”等非目标类别误判为 person。
+    if (raw_name == "人" ||
+        raw_name == "行人" ||
+        raw_name == "人体" ||
+        raw_name == "人员") {
+        return true;
+    }
+
+    return false;
+}
+
 static cv::Scalar tracker_color_for_item(int label, int track_id) {
+    if (tracker_label_is_person(label)) {
+        return cv::Scalar(0, 255, 0);
+    }
     if (label >= 0) {
         return tracker_color_from_label(label);
     }
