@@ -31,35 +31,20 @@ public class DetectionRecord {
     @Column(name = "image_url", length = 500)
     private String imageUrl;
     
-    @Column(name = "image_bucket")
-    private String imageBucket;
-    
-    @Column(name = "image_object_key")
-    private String imageObjectKey;
-    
-    @Column(nullable = false)
-    private Integer level; // 1: 低风险, 2: 中风险, 3: 高风险
-    
-    @Column(name = "is_violence", nullable = false)
-    private Boolean isViolence = false;
-    
     @Column(name = "ai_description", columnDefinition = "TEXT")
     private String aiDescription;
-    
-    @Column(name = "confidence_score")
-    private Double confidenceScore;
-    
-    @Column(name = "person_count")
-    private Integer personCount;
-    
-    @Column(name = "location", length = 200)
-    private String location;
+
+    @Column(name = "ai_analysis_status", length = 32)
+    private String aiAnalysisStatus;
+
+    @Column(name = "ai_analysis_result", columnDefinition = "TEXT")
+    private String aiAnalysisResult;
+
+    @Column(name = "ai_analysis_time")
+    private LocalDateTime aiAnalysisTime;
     
     @Column(name = "is_processed", nullable = false)
     private Boolean isProcessed = false;
-    
-    @Column(name = "processed_by")
-    private Long processedBy;
     
     @Column(name = "processed_time")
     private LocalDateTime processedTime;

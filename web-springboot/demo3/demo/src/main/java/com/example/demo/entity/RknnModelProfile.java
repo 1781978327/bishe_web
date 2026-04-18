@@ -37,14 +37,8 @@ public class RknnModelProfile {
     @Column(name = "label_object_key", length = 500)
     private String labelObjectKey;
 
-    @Column(name = "yaml_object_key", length = 500)
-    private String yamlObjectKey;
-
     @Column(nullable = false)
     private Boolean selected = false;
-
-    @Column(name = "last_selected_time")
-    private LocalDateTime lastSelectedTime;
 
     @CreatedDate
     @Column(name = "create_time")

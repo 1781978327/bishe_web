@@ -9,6 +9,7 @@ import com.example.demo.dto.SoundAnomalyReportRequest;
 import com.example.demo.entity.DetectionRecord;
 import com.example.demo.repository.CameraRepository;
 import com.example.demo.repository.DetectionRecordRepository;
+import com.example.demo.service.DetectionRecordAiAnalysisService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +45,7 @@ public class DetectionRecordController {
 
     private final DetectionRecordRepository detectionRecordRepository;
     private final CameraRepository cameraRepository;
+    private final DetectionRecordAiAnalysisService detectionRecordAiAnalysisService;
 
     @PostMapping
     public Result<Boolean> add(@Valid @RequestBody DetectionRecordAddRequest request) {
@@ -55,10 +57,9 @@ public class DetectionRecordController {
 
         record.setDetectionTime(parseTimeOrNow(request.getDetectionTime()));
         record.setAiDescription(request.getDetectionResult());
-        record.setIsViolence(true);
         record.setIsProcessed(false);
-        record.setLevel(extractLevel(request.getDetectionResult()));
         record.setImageUrl(saveBase64ImageAndGetUrl(request.getImageBase64()));
+        detectionRecordAiAnalysisService.preparePendingAnalysis(record);
 
         // 设置声音异常专用字段
         if (request.getAudioUrl() != null) {
@@ -71,7 +72,8 @@ public class DetectionRecordController {
             record.setSoundKeywords(request.getSoundKeywords());
         }
 
-        detectionRecordRepository.save(record);
+        DetectionRecord saved = detectionRecordRepository.save(record);
+        detectionRecordAiAnalysisService.requestAnalysis(saved.getId());
         return Result.success(true);
     }
 
@@ -195,6 +197,9 @@ public class DetectionRecordController {
         vo.setCreateTime(r.getCreateTime() == null ? null : r.getCreateTime().toString());
         // 环境监测专用字段
         vo.setAiDescription(r.getAiDescription());
+        vo.setAiAnalysisStatus(r.getAiAnalysisStatus());
+        vo.setAiAnalysisResult(r.getAiAnalysisResult());
+        vo.setAiAnalysisTime(r.getAiAnalysisTime() == null ? null : r.getAiAnalysisTime().toString());
         vo.setProcessNotes(r.getProcessNotes());
 
         // 声音异常专用字段
@@ -218,38 +223,6 @@ public class DetectionRecordController {
         } catch (DateTimeParseException e) {
             return LocalDateTime.now();
         }
-    }
-
-    private int extractLevel(String detectionResult) {
-        // 不再依赖 riskLevel/maxRiskLevel，由算法事件类型决定等级：
-        // - fight/knife: 3
-        // - fall: 2
-        // - sound_scream/sound_glass: 3
-        // - sound_fight: 4
-        // - sound_other: 2
-        // - 其他: 1
-        if (detectionResult == null) {
-            return 1;
-        }
-        String s = detectionResult.toLowerCase();
-        if (s.contains("\"type\":\"sound_fight\"") || s.contains("sound_fight")) {
-            return 4;
-        }
-        if (s.contains("\"type\":\"sound_scream\"") || s.contains("sound_scream") ||
-                s.contains("\"type\":\"sound_glass\"") || s.contains("sound_glass")) {
-            return 3;
-        }
-        if (s.contains("\"type\":\"sound_other\"") || s.contains("sound_other")) {
-            return 2;
-        }
-        if (s.contains("\"type\":\"fight\"") || s.contains("\"type\":\"knife\"") ||
-                s.contains("fight") || s.contains("knife")) {
-            return 3;
-        }
-        if (s.contains("\"type\":\"fall\"") || s.contains("fall")) {
-            return 2;
-        }
-        return 1;
     }
 
     private String saveBase64ImageAndGetUrl(String imageBase64) {
@@ -306,12 +279,12 @@ public class DetectionRecordController {
                     .orElse("摄像头" + request.getCameraId()));
             record.setDetectionTime(parseTimeOrNow(request.getDetectionTime()));
             record.setAiDescription(request.getDetectionResult());
-            record.setIsViolence(true);
             record.setIsProcessed(false);
-            record.setLevel(extractLevel(request.getDetectionResult()));
             record.setImageUrl(saveBase64ImageAndGetUrl(request.getImageBase64()));
+            detectionRecordAiAnalysisService.preparePendingAnalysis(record);
 
-            detectionRecordRepository.save(record);
+            DetectionRecord saved = detectionRecordRepository.save(record);
+            detectionRecordAiAnalysisService.requestAnalysis(saved.getId());
             log.info("RKNN 阈值告警已上报到安全记录: cameraId={}, result={}",
                     request.getCameraId(), request.getDetectionResult());
             return Result.success(true);
@@ -335,9 +308,8 @@ public class DetectionRecordController {
             record.setCameraName(request.getCameraName() != null ? request.getCameraName() : "声音监测");
             record.setDetectionTime(request.getDetectionTime() != null ? parseTimeOrNow(request.getDetectionTime()) : LocalDateTime.now());
             record.setAiDescription(request.getDetectionResult());
-            record.setIsViolence(true);
             record.setIsProcessed(false);
-            record.setLevel(extractLevel(request.getDetectionResult()));
+            detectionRecordAiAnalysisService.preparePendingAnalysis(record);
 
             // 声音异常专用字段
             if (request.getAudioUrl() != null) {
@@ -350,7 +322,8 @@ public class DetectionRecordController {
                 record.setSoundKeywords(request.getSoundKeywords());
             }
 
-            detectionRecordRepository.save(record);
+            DetectionRecord saved = detectionRecordRepository.save(record);
+            detectionRecordAiAnalysisService.requestAnalysis(saved.getId());
             log.info("声音异常已上报到安全记录: {}", request.getDetectionResult());
             return Result.success(true);
         } catch (Exception e) {

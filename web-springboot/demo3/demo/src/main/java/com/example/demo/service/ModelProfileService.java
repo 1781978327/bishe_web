@@ -11,7 +11,6 @@ import org.springframework.util.StringUtils;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,7 +44,7 @@ public class ModelProfileService {
 
         String safeUsername = normalizeUsername(username);
         String ext = getExtension(originalFilename);
-        if (!".rknn".equals(ext) && !".txt".equals(ext) && !".yaml".equals(ext)) {
+        if (!".rknn".equals(ext) && !".txt".equals(ext)) {
             return;
         }
 
@@ -66,10 +65,8 @@ public class ModelProfileService {
 
         if (".rknn".equals(ext)) {
             profile.setModelObjectKey(normalizedKey);
-        } else if (".txt".equals(ext)) {
-            profile.setLabelObjectKey(normalizedKey);
         } else {
-            profile.setYamlObjectKey(normalizedKey);
+            profile.setLabelObjectKey(normalizedKey);
         }
 
         modelProfileRepository.save(profile);
@@ -157,9 +154,6 @@ public class ModelProfileService {
         for (RknnModelProfile item : all) {
             boolean isCurrent = item.getId().equals(profile.getId());
             item.setSelected(isCurrent);
-            if (isCurrent) {
-                item.setLastSelectedTime(LocalDateTime.now());
-            }
         }
         modelProfileRepository.saveAll(all);
 
@@ -217,17 +211,14 @@ public class ModelProfileService {
         view.put("builtinKey", builtinModel.key());
         view.put("modelObjectKey", builtinModel.modelPath());
         view.put("labelObjectKey", builtinModel.labelPath());
-        view.put("yamlObjectKey", null);
         view.put("modelUrl", null);
         view.put("labelUrl", null);
-        view.put("yamlUrl", null);
         view.put("modelPath", builtinModel.modelPath());
         view.put("labelPath", builtinModel.labelPath());
         view.put("selected", selected);
         view.put("ready", builtinModel.ready());
         view.put("createTime", null);
         view.put("updateTime", null);
-        view.put("lastSelectedTime", null);
         return view;
     }
 
@@ -250,17 +241,14 @@ public class ModelProfileService {
         view.put("source", UPLOAD_SOURCE);
         view.put("modelObjectKey", profile.getModelObjectKey());
         view.put("labelObjectKey", profile.getLabelObjectKey());
-        view.put("yamlObjectKey", profile.getYamlObjectKey());
         view.put("modelUrl", buildFileUrl(profile.getModelObjectKey()));
         view.put("labelUrl", buildFileUrl(profile.getLabelObjectKey()));
-        view.put("yamlUrl", buildFileUrl(profile.getYamlObjectKey()));
         view.put("modelPath", modelPath);
         view.put("labelPath", labelPath);
         view.put("selected", selected);
         view.put("ready", ready);
         view.put("createTime", profile.getCreateTime());
         view.put("updateTime", profile.getUpdateTime());
-        view.put("lastSelectedTime", profile.getLastSelectedTime());
         return view;
     }
 

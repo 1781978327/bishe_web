@@ -38,18 +38,6 @@ public class Camera {
     @Column(name = "detection_enabled", nullable = false)
     private Boolean detectionEnabled = true;
     
-    @Column(name = "resolution", length = 50)
-    private String resolution;
-    
-    @Column(name = "frame_rate")
-    private Integer frameRate;
-    
-    @Column(name = "last_online_time")
-    private LocalDateTime lastOnlineTime;
-    
-    @Column(name = "description", columnDefinition = "TEXT")
-    private String description;
-    
     @CreatedDate
     @Column(name = "create_time")
     private LocalDateTime createTime;

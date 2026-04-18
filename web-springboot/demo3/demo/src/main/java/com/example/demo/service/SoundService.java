@@ -387,6 +387,44 @@ public class SoundService {
         return result;
     }
 
+    /**
+     * 获取最近实时窗口状态（不限于异常）
+     */
+    public Map<String, Object> getRealtimeWindows(int limit) {
+        Map<String, Object> result = new HashMap<>();
+        int normalizedLimit = Math.max(1, Math.min(limit, 50));
+
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(String.format("http://%s:%d/realtime/windows?limit=%d",
+                soundServerHost, soundServerPort, normalizedLimit));
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode == 200) {
+                String response = readConnectionBody(conn);
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                Map<String, Object> windowsResult = mapper.readValue(response, Map.class);
+                result.putAll(windowsResult);
+                result.put("success", true);
+            } else {
+                result.put("success", false);
+                result.put("error", "获取实时窗口状态失败");
+            }
+        } catch (Exception e) {
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+        return result;
+    }
+
     public SoundEvent getLatestEvent() {
         return latestEvent;
     }

@@ -151,6 +151,19 @@ public class SoundController {
     }
 
     /**
+     * 获取最近实时窗口状态
+     */
+    @GetMapping("/realtime/windows")
+    public Result<Map<String, Object>> getRealtimeWindows(@RequestParam(defaultValue = "5") int limit) {
+        try {
+            return Result.success(soundService.getRealtimeWindows(limit));
+        } catch (Exception e) {
+            log.error("获取实时窗口状态失败", e);
+            return Result.error(500, "获取失败: " + e.getMessage());
+        }
+    }
+
+    /**
      * 开启实时监测
      */
     @PostMapping("/realtime/start")

@@ -7,10 +7,6 @@ export interface Camera {
   status: number
   isEnabled: boolean
   detectionEnabled: boolean
-  resolution?: string
-  frameRate?: number
-  description?: string
-  lastOnlineTime?: string
   createTime?: string
   updateTime?: string
   // 兼容前端现有字段
@@ -48,9 +44,6 @@ export interface CameraCreateParams {
   name: string
   location: string
   rtspUrl: string
-  resolution?: string
-  frameRate?: number
-  description?: string
 }
 
 // 更新摄像头参数

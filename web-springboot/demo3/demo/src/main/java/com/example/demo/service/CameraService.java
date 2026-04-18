@@ -12,7 +12,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.persistence.criteria.Predicate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,14 +31,6 @@ public class CameraService {
         camera.setStatus(request.getStatus() != null ? request.getStatus() : 0); // 默认离线
         camera.setIsEnabled(request.getIsEnabled() != null ? request.getIsEnabled() : true);
         camera.setDetectionEnabled(request.getDetectionEnabled() != null ? request.getDetectionEnabled() : true);
-        camera.setResolution(request.getResolution());
-        camera.setFrameRate(request.getFrameRate());
-        camera.setDescription(request.getDescription());
-        
-        // 只有状态为在线时才设置最后在线时间
-        if (camera.getStatus() == 1) {
-            camera.setLastOnlineTime(LocalDateTime.now());
-        }
         
         return cameraRepository.save(camera);
     }
@@ -93,24 +84,12 @@ public class CameraService {
         }
         if (request.getStatus() != null) {
             camera.setStatus(request.getStatus());
-            if (request.getStatus() == 1) {
-                camera.setLastOnlineTime(LocalDateTime.now());
-            }
         }
         if (request.getIsEnabled() != null) {
             camera.setIsEnabled(request.getIsEnabled());
         }
         if (request.getDetectionEnabled() != null) {
             camera.setDetectionEnabled(request.getDetectionEnabled());
-        }
-        if (request.getResolution() != null) {
-            camera.setResolution(request.getResolution());
-        }
-        if (request.getFrameRate() != null) {
-            camera.setFrameRate(request.getFrameRate());
-        }
-        if (request.getDescription() != null) {
-            camera.setDescription(request.getDescription());
         }
         
         return cameraRepository.save(camera);
@@ -142,17 +121,13 @@ public class CameraService {
     public void updateCameraStatus(Long id, Integer status) {
         Camera camera = getCameraById(id);
         camera.setStatus(status);
-        if (status == 1) {
-            camera.setLastOnlineTime(LocalDateTime.now());
-        }
         cameraRepository.save(camera);
     }
 
-    // 心跳：算法端定时上报，标记为在线并刷新最后在线时间
+    // 心跳：算法端定时上报，标记为在线
     public void heartbeat(Long id) {
         Camera camera = getCameraById(id);
         camera.setStatus(1);
-        camera.setLastOnlineTime(LocalDateTime.now());
         cameraRepository.save(camera);
     }
     

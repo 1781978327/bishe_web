@@ -20,12 +20,4 @@ public class CameraUpdateRequest {
     private Boolean isEnabled;
 
     private Boolean detectionEnabled;
-
-    @Size(max = 50, message = "分辨率长度不能超过50个字符")
-    private String resolution;
-
-    private Integer frameRate;
-
-    private String description;
 }
-

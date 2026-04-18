@@ -152,6 +152,17 @@ npm run build
 - `GET /api/camera`
 - `GET /api/sound/audio?path=...`
 
+当前页面真实行为补充：
+
+- 详情页会显示同一条安全记录的 `AI 融合分析`
+- 前端读取的字段包括
+  - `aiAnalysisStatus`
+  - `aiAnalysisResult`
+  - `aiAnalysisTime`
+- 声音记录详情默认显示声音信息与音频播放器
+- 视频记录详情默认显示检测图像
+- 如果声音记录想显示图片，前提是后端该条记录本身带了 `imageUrl`
+
 ### 个人中心 `/profile`
 
 主要调用：

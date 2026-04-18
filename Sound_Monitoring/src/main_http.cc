@@ -33,6 +33,10 @@
  *   GET  /realtime/events   - 获取累积的异常事件
  *                             Response: {"events": [...], "count": N}
  *
+ *   GET  /realtime/windows?limit=5
+ *                             - 获取最近 N 个实时检测窗口状态（不限于异常）
+ *                             Response: {"windows": [...], "count": N}
+ *
  *   GET  /realtime/transcript?seconds=120
  *                             - 获取最近 N 秒（最大120秒）的麦克风转写文本
  *                             Response: {"success": true, "transcript": "...", "asr_lang": "cn"}
@@ -141,6 +145,7 @@ static ServerConfig config = {
 #define RT_MAX_EVENTS 100
 #define RT_MAX_KEYWORDS 10
 #define RT_EVENT_QUEUE_SIZE 50
+#define RT_WINDOW_QUEUE_SIZE 50
 
 typedef struct {
     int event_id;
@@ -154,6 +159,17 @@ typedef struct {
     char timestamp[64];
 } RealtimeEvent;
 
+typedef struct {
+    int window_id;
+    float start_sec;
+    float end_sec;
+    int anomaly;
+    float matched_score;
+    char matched_keyword[64];
+    char top_summary[256];
+    char timestamp[64];
+} RealtimeWindowStatus;
+
 static volatile int rt_running = 0;
 static volatile int rt_active = 0;
 static pthread_t rt_thread;
@@ -165,6 +181,11 @@ static RealtimeEvent rt_event_queue[RT_EVENT_QUEUE_SIZE];
 static volatile int rt_event_head = 0;  // 写入位置
 static volatile int rt_event_tail = 0;   // 读取位置
 static volatile int rt_event_count = 0;  // 当前队列事件数
+
+static RealtimeWindowStatus rt_window_queue[RT_WINDOW_QUEUE_SIZE];
+static volatile int rt_window_head = 0;
+static volatile int rt_window_tail = 0;
+static volatile int rt_window_count = 0;
 
 // 当前正在构建的事件
 static struct {
@@ -454,6 +475,45 @@ static void rt_push_event(float start_sec, float end_sec, float max_score) {
     pthread_cond_signal(&rt_cond);
 }
 
+static void rt_push_window_status(int window_id,
+                                  float start_sec,
+                                  float end_sec,
+                                  int anomaly,
+                                  const char *matched_kw,
+                                  float matched_score,
+                                  const ResultEntry *results,
+                                  int result_count) {
+    char top_summary[256] = {0};
+    std::string summary = summarize_top_results(results, result_count, 3);
+    strncpy(top_summary, summary.c_str(), sizeof(top_summary) - 1);
+
+    pthread_mutex_lock(&rt_mutex);
+    if (rt_window_count >= RT_WINDOW_QUEUE_SIZE) {
+        rt_window_tail = (rt_window_tail + 1) % RT_WINDOW_QUEUE_SIZE;
+        rt_window_count--;
+    }
+
+    RealtimeWindowStatus *window = &rt_window_queue[rt_window_head];
+    memset(window, 0, sizeof(*window));
+    window->window_id = window_id;
+    window->start_sec = start_sec;
+    window->end_sec = end_sec;
+    window->anomaly = anomaly ? 1 : 0;
+    window->matched_score = anomaly ? matched_score : 0.0f;
+    if (anomaly && matched_kw) {
+        strncpy(window->matched_keyword, matched_kw, sizeof(window->matched_keyword) - 1);
+    }
+    strncpy(window->top_summary, top_summary, sizeof(window->top_summary) - 1);
+
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    strftime(window->timestamp, sizeof(window->timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    rt_window_head = (rt_window_head + 1) % RT_WINDOW_QUEUE_SIZE;
+    rt_window_count++;
+    pthread_mutex_unlock(&rt_mutex);
+}
+
 static void rt_reset_current_event() {
     memset(&rt_current_event, 0, sizeof(rt_current_event));
 }
@@ -608,12 +668,21 @@ static void *rt_monitor_thread(void *arg) {
                 const char *matched_kw = NULL;
                 float matched_score = 0.0f;
                 int is_anom = is_anomaly(rt_result, TOP_N, &matched_kw, &matched_score);
+                double window_start = current_ts - RT_CHUNK_DURATION_SEC;
+                if (window_start < 0.0) {
+                    window_start = 0.0;
+                }
+
+                rt_push_window_status(rt_total_chunks,
+                                      (float)window_start,
+                                      (float)current_ts,
+                                      is_anom,
+                                      matched_kw,
+                                      matched_score,
+                                      rt_result,
+                                      TOP_N);
 
                 if (g_rt_print_window) {
-                    double window_start = current_ts - RT_CHUNK_DURATION_SEC;
-                    if (window_start < 0.0) {
-                        window_start = 0.0;
-                    }
                     std::string top_summary = summarize_top_results(rt_result, TOP_N, 3);
                     printf("[RT WINDOW] #%d [%.1fs - %.1fs] anomaly=%s matched=%s score=%.4f top=%s\n",
                            rt_total_chunks,
@@ -723,6 +792,9 @@ static int rt_start(const char *device) {
     rt_event_head = 0;
     rt_event_tail = 0;
     rt_event_count = 0;
+    rt_window_head = 0;
+    rt_window_tail = 0;
+    rt_window_count = 0;
 
     // 初始化事件音频存储
     event_audio_init();
@@ -834,6 +906,20 @@ static int parse_seconds_from_query(const char *query, int default_sec, int max_
     return sec;
 }
 
+static int parse_int_from_query(const char *query, const char *key, int default_value, int max_value) {
+    if (!query || query[0] == '\0' || !key || key[0] == '\0') return default_value;
+
+    std::string needle = std::string(key) + "=";
+    const char *hit = strstr(query, needle.c_str());
+    if (!hit) return default_value;
+
+    hit += needle.size();
+    int value = atoi(hit);
+    if (value <= 0) return default_value;
+    if (max_value > 0 && value > max_value) return max_value;
+    return value;
+}
+
 static int parse_flag_from_query(const char *query, const char *key) {
     if (!query || !key || key[0] == '\0') return 0;
 
@@ -867,6 +953,7 @@ static int should_log_http_request(const char *method, const char *path) {
     if (!method || !path) return 1;
     if (strcmp(method, "GET") == 0) {
         if (strcmp(path, "/realtime/events") == 0 ||
+            strcmp(path, "/realtime/windows") == 0 ||
             strcmp(path, "/realtime/status") == 0 ||
             strcmp(path, "/health") == 0) {
             return 0;
@@ -886,7 +973,10 @@ static std::string summarize_top_results(const ResultEntry *results, int result_
         if (i > 0) {
             oss << ", ";
         }
-        oss << (results[i].token ? results[i].token : "<null>")
+        std::string token = results[i].token ? results[i].token : "<null>";
+        std::replace(token.begin(), token.end(), '\n', ' ');
+        std::replace(token.begin(), token.end(), '\r', ' ');
+        oss << token
             << "(" << results[i].score << ")";
     }
     return oss.str();
@@ -1602,6 +1692,55 @@ void handle_realtime_events(int client_fd) {
     send_response(client_fd, "200 OK", "application/json", body, strlen(body));
 }
 
+void handle_realtime_windows(int client_fd, const char *query) {
+    int total = 0;
+    int head = 0;
+    int limit = parse_int_from_query(query, "limit", 5, RT_WINDOW_QUEUE_SIZE);
+    RealtimeWindowStatus queue[RT_WINDOW_QUEUE_SIZE];
+
+    pthread_mutex_lock(&rt_mutex);
+    total = rt_window_count;
+    head = rt_window_head;
+    memcpy(queue, rt_window_queue, sizeof(rt_window_queue));
+    pthread_mutex_unlock(&rt_mutex);
+
+    int returned = std::min(limit, total);
+    std::ostringstream out;
+    out << "{"
+        << "\"success\": true,"
+        << "\"count\": " << total << ","
+        << "\"returned\": " << returned << ","
+        << "\"limit\": " << limit << ","
+        << "\"windows\": [";
+
+    for (int i = 0; i < returned; ++i) {
+        int idx = (head - 1 - i + RT_WINDOW_QUEUE_SIZE) % RT_WINDOW_QUEUE_SIZE;
+        RealtimeWindowStatus *w = &queue[idx];
+
+        char escaped_keyword[256] = {0};
+        char escaped_summary[1024] = {0};
+        json_escape_string(w->matched_keyword, escaped_keyword, sizeof(escaped_keyword));
+        json_escape_string(w->top_summary, escaped_summary, sizeof(escaped_summary));
+
+        if (i > 0) out << ",";
+        out << "{"
+            << "\"id\": " << w->window_id << ","
+            << "\"start\": " << w->start_sec << ","
+            << "\"end\": " << w->end_sec << ","
+            << "\"duration\": " << (w->end_sec - w->start_sec) << ","
+            << "\"anomaly\": " << (w->anomaly ? "true" : "false") << ","
+            << "\"matched_keyword\": \"" << escaped_keyword << "\","
+            << "\"matched_score\": " << w->matched_score << ","
+            << "\"top_summary\": \"" << escaped_summary << "\","
+            << "\"timestamp\": \"" << w->timestamp << "\""
+            << "}";
+    }
+
+    out << "]}";
+    std::string body = out.str();
+    send_response(client_fd, "200 OK", "application/json", body.c_str(), (int)body.size());
+}
+
 void handle_realtime_transcript(int client_fd, const char *query) {
     int req_seconds = parse_seconds_from_query(query, RT_TRANSCRIPT_DEFAULT_SEC, RT_TRANSCRIPT_MAX_SEC);
     int should_save_audio = parse_flag_from_query(query, "save_audio");
@@ -1884,6 +2023,8 @@ void handle_client(int client_fd) {
         handle_realtime_status(client_fd);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/realtime/events") == 0) {
         handle_realtime_events(client_fd);
+    } else if (strcmp(method, "GET") == 0 && strcmp(path, "/realtime/windows") == 0) {
+        handle_realtime_windows(client_fd, query_str);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/realtime/transcript") == 0) {
         handle_realtime_transcript(client_fd, query_str);
     } else {
@@ -2087,6 +2228,7 @@ int main(int argc, char *argv[]) {
     printf("    POST /realtime/stop     - 停止实时监测\n");
     printf("    GET  /realtime/status  - 查询监测状态\n");
     printf("    GET  /realtime/events  - 获取异常事件\n");
+    printf("    GET  /realtime/windows?limit=5 - 获取最近窗口状态\n");
     printf("    GET  /realtime/transcript?seconds=120 - 获取最近麦克风转写\n");
     printf("    GET  /health           - 健康检查\n");
     printf("    GET  /config           - 获取配置\n");
@@ -2112,6 +2254,7 @@ int main(int argc, char *argv[]) {
     printf("         -d '{\"device\": \"plughw:CARD=Camera_1,DEV=0\"}'\n");
     printf("    curl http://localhost:%d/realtime/status\n", port);
     printf("    curl http://localhost:%d/realtime/events\n", port);
+    printf("    curl http://localhost:%d/realtime/windows?limit=5\n", port);
     printf("    curl http://localhost:%d/realtime/transcript?seconds=120\n", port);
     printf("======================================================================\n\n");
 

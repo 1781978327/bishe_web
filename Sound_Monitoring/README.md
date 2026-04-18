@@ -176,6 +176,32 @@ curl -X POST http://127.0.0.1:8089/realtime/stop
 }
 ```
 
+### `GET /realtime/windows?limit=5`
+
+返回最近 N 个实时检测窗口状态，不只包含异常窗口。
+
+```json
+{
+  "success": true,
+  "count": 15,
+  "returned": 5,
+  "limit": 5,
+  "windows": [
+    {
+      "id": 15,
+      "start": 21.0,
+      "end": 24.0,
+      "duration": 3.0,
+      "anomaly": false,
+      "matched_keyword": "",
+      "matched_score": 0.0,
+      "top_summary": "White noise(0.45), Noise(0.27), Mechanical fan(0.22)",
+      "timestamp": "2026-04-18 10:52:42"
+    }
+  ]
+}
+```
+
 ### `GET /realtime/events`
 
 返回事件队列：
@@ -270,6 +296,7 @@ http://localhost:8080/api/detection/record/sound/report
 curl http://127.0.0.1:8089/health
 curl http://127.0.0.1:8089/config
 curl http://127.0.0.1:8089/realtime/status
+curl http://127.0.0.1:8089/realtime/windows?limit=5
 ```
 
 上传测试：

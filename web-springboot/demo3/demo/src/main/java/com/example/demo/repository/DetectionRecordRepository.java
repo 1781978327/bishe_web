@@ -16,8 +16,6 @@ public interface DetectionRecordRepository extends JpaRepository<DetectionRecord
     
     Page<DetectionRecord> findByIsProcessedOrderByDetectionTimeDesc(Boolean isProcessed, Pageable pageable);
     
-    Page<DetectionRecord> findByIsViolenceOrderByDetectionTimeDesc(Boolean isViolence, Pageable pageable);
-    
     Page<DetectionRecord> findByCameraIdOrderByDetectionTimeDesc(Long cameraId, Pageable pageable);
     
     @Query("SELECT d FROM DetectionRecord d WHERE d.detectionTime BETWEEN :startTime AND :endTime ORDER BY d.detectionTime DESC")
@@ -28,8 +26,6 @@ public interface DetectionRecordRepository extends JpaRepository<DetectionRecord
     List<DetectionRecord> findByIsProcessedFalseOrderByDetectionTimeDesc();
     
     Long countByIsProcessedFalse();
-    
-    Long countByIsViolenceTrue();
 
     // 按事件类型关键词查询（支持前缀匹配）
     @Query("SELECT d FROM DetectionRecord d WHERE d.aiDescription LIKE %:keyword% ORDER BY d.detectionTime DESC")

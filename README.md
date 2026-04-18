@@ -230,6 +230,139 @@ curl -X POST "http://127.0.0.1:8080/api/rknn/rtsp/camera/start"
 - `/api/rknn/status` 会把视觉服务返回里的 `localhost/127.0.0.1` RTSP 地址改写成当前请求主机，便于前端直接播放
 - 录像真正落盘在视觉服务目录，Spring Boot 只负责代理状态、列表和下载
 
+## AI 融合分析
+
+当前后端已经接入“异常落库后自动触发 AI 融合分析”的链路。
+
+### 触发方式
+
+以下三类异常写入 `detection_records` 后，会自动异步触发 AI：
+
+- 视频类异常上报
+- 声音类异常上报
+- 环境类异常记录
+
+AI 不是新建一条独立记录，而是把分析结果回写到原来的安全记录里。
+
+### 当前聚合的数据
+
+后端会按当前代码汇总：
+
+- 触发异常记录本身
+- 最近 `2` 条传感器历史
+- 当前传感器阈值
+- 最近 `5` 个声音实时窗口
+- 声音实时状态与实时异常事件
+- 视觉状态与两路检测计数
+- 记录自带图片；如果记录没有图片，则尽量抓当前帧补图
+
+说明：
+
+- 当前不会为了 AI 额外录制一段“新的当前音频文件”
+- 声音上下文主要来自声音服务实时窗口与事件接口
+
+### 配置
+
+启动 Spring Boot 前建议先设置：
+
+```bash
+export VISION_API_KEY='你的 key'
+export VISION_BASE_URL='https://api.866646.xyz/'
+export RISK_MODEL='qwen3-vl:235b-instruct'
+```
+
+如果你平时通过根目录脚本启动，当前也可以直接把这些变量写到本地文件：
+
+```bash
+/home/orangepi/Desktop/web/bishebeifen-master/.runtime/ai.env
+```
+
+例如：
+
+```bash
+VISION_API_KEY='你的 key'
+VISION_BASE_URL='https://api.866646.xyz/'
+RISK_MODEL='qwen3-vl:235b-instruct'
+```
+
+`start_all_stack.sh` 会自动加载这个文件，所以日常只需要执行：
+
+```bash
+./start_all_stack.sh
+```
+
+对应的后端配置项在 `application.properties`：
+
+- `ai.analysis.enabled`
+- `ai.analysis.base-url`
+- `ai.analysis.api-key`
+- `ai.analysis.model`
+- `ai.analysis.sensor-history-size`
+- `ai.analysis.sound-window-limit`
+
+注意：
+
+- 这些环境变量需要在后端启动前就存在
+- 如果你改了 `VISION_API_KEY` 但后端已经在跑，最好重启后端；如果是用 `./gradlew bootRun`，必要时先执行一次 `./gradlew --stop`
+
+### 前端显示
+
+前端“安全记录”详情页现在会显示：
+
+- `aiAnalysisStatus`
+- `aiAnalysisResult`
+- `aiAnalysisTime`
+
+也就是同一条安全记录里同时保留：
+
+- 原始异常信息
+- 图片或音频信息
+- AI 融合分析结论
+
+### 快速模拟区域闯入
+
+如果暂时不方便做真实禁入区闯入，可以直接构造一条 `env_intrusion` 上报：
+
+```bash
+python3 - <<'PY'
+import base64, json
+from pathlib import Path
+
+img = Path('/home/orangepi/Desktop/web/bishebeifen-master/测试大模型/R-C.jpg').read_bytes()
+payload = {
+    "cameraId": 1,
+    "detectionResult": json.dumps({
+        "type": "env_intrusion",
+        "cam": 0,
+        "hitCount": 1,
+        "zonePoints": [
+            {"x": 160, "y": 120},
+            {"x": 480, "y": 120},
+            {"x": 480, "y": 400},
+            {"x": 160, "y": 400}
+        ],
+        "objects": [
+            {
+                "label": "person",
+                "cls": 0,
+                "score": 0.93,
+                "center": {"x": 320, "y": 260},
+                "box": {"x1": 240, "y1": 120, "x2": 400, "y2": 420}
+            }
+        ]
+    }, ensure_ascii=False),
+    "imageBase64": base64.b64encode(img).decode("utf-8")
+}
+Path('/tmp/env_intrusion_test.json').write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+PY
+
+curl -X POST http://127.0.0.1:8080/api/detection/record/rknn/report \
+  -H 'Content-Type: application/json' \
+  --data-binary @/tmp/env_intrusion_test.json
+```
+
+然后去前端“安全记录”里查看这条记录的图片、原始 `env_intrusion` 数据和 AI 融合分析结果。
+
 ## 模块 README
 
 - `web-vue/README`

@@ -536,6 +536,77 @@
             </div>
           </div>
         </div>
+
+        <div class="ai-analysis-detail">
+          <div class="section-header">
+            <el-icon><DataAnalysis /></el-icon>
+            <h3>AI 融合分析</h3>
+          </div>
+
+          <el-descriptions :column="2" border class="ai-analysis-meta">
+            <el-descriptions-item label="分析状态">
+              <el-tag :type="getAiAnalysisStatusType(currentRecord.aiAnalysisStatus)" effect="light">
+                {{ getAiAnalysisStatusText(currentRecord.aiAnalysisStatus) }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="分析时间">
+              {{ currentRecord.aiAnalysisTime ? formatDateTime(currentRecord.aiAnalysisTime) : '--' }}
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div v-if="parsedAiAnalysis" class="ai-analysis-content">
+            <el-alert
+              :title="parsedAiAnalysis.summary || 'AI 已完成融合分析'"
+              :type="parsedAiAnalysis.risk_level >= 4 ? 'error' : (parsedAiAnalysis.risk_level >= 3 ? 'warning' : 'success')"
+              :closable="false"
+              show-icon
+            />
+
+            <el-descriptions :column="2" border class="ai-analysis-json">
+              <el-descriptions-item label="风险等级">
+                <el-tag :type="parsedAiAnalysis.risk_level >= 4 ? 'danger' : (parsedAiAnalysis.risk_level >= 3 ? 'warning' : 'success')">
+                  {{ parsedAiAnalysis.risk_level ?? '--' }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="触发类型">
+                {{ parsedAiAnalysis.trigger_event_type || '--' }}
+              </el-descriptions-item>
+            </el-descriptions>
+
+            <div v-if="parsedAiAnalysis.cross_service_findings?.length" class="ai-analysis-block">
+              <h4>交叉发现</h4>
+              <ul class="ai-analysis-list">
+                <li v-for="(item, index) in parsedAiAnalysis.cross_service_findings" :key="`finding-${index}`">
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+
+            <div v-if="parsedAiAnalysis.recommended_actions?.length" class="ai-analysis-block">
+              <h4>建议动作</h4>
+              <ul class="ai-analysis-list">
+                <li v-for="(item, index) in parsedAiAnalysis.recommended_actions" :key="`action-${index}`">
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+
+            <div v-if="parsedAiAnalysis.data_gaps?.length" class="ai-analysis-block">
+              <h4>数据缺口</h4>
+              <ul class="ai-analysis-list">
+                <li v-for="(item, index) in parsedAiAnalysis.data_gaps" :key="`gap-${index}`">
+                  {{ item }}
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div v-else-if="currentRecord.aiAnalysisResult" class="ai-analysis-raw">
+            <pre>{{ currentRecord.aiAnalysisResult }}</pre>
+          </div>
+
+          <el-empty v-else description="暂无 AI 融合分析结果" :image-size="96" />
+        </div>
         
         <!-- 处理信息 -->
         <div v-if="currentRecord.processed === 1" class="process-detail">
@@ -746,6 +817,16 @@ const parsedDetectionResult = computed(() => {
   }
 })
 
+const parsedAiAnalysis = computed(() => {
+  const raw = currentRecord.value?.aiAnalysisResult
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch (e) {
+    return null
+  }
+})
+
 // 是否为环境监测记录
 const isEnvRecord = computed(() => {
   return currentRecord.value?.cameraName === '环境监测'
@@ -772,7 +853,7 @@ const getAudioUrl = computed(() => {
 })
 
 // 格式化音频时长
-const formatAudioDuration = (seconds: number) => {
+const formatAudioDuration = (seconds?: number) => {
   if (!seconds) return '--'
   const mins = Math.floor(seconds / 60)
   const secs = Math.floor(seconds % 60)
@@ -894,6 +975,28 @@ const formatEventTypeFromRecord = (row: any) => {
   }
 }
 
+const getAiAnalysisStatusText = (status?: string) => {
+  switch (status) {
+    case 'PENDING': return '等待分析'
+    case 'RUNNING': return '分析中'
+    case 'SUCCESS': return '分析完成'
+    case 'FAILED': return '分析失败'
+    case 'SKIPPED': return '已跳过'
+    default: return '未分析'
+  }
+}
+
+const getAiAnalysisStatusType = (status?: string) => {
+  switch (status) {
+    case 'PENDING': return 'info'
+    case 'RUNNING': return 'warning'
+    case 'SUCCESS': return 'success'
+    case 'FAILED': return 'danger'
+    case 'SKIPPED': return 'info'
+    default: return 'info'
+  }
+}
+
 // 图片引用
 const processImageRef = ref();
 
@@ -979,7 +1082,6 @@ const handleCurrentChange = (current: number) => {
 // 查看详情
 const viewDetail = (row: DetectionRecord) => {
   console.log('[DEBUG viewDetail] 传入的row数据:', JSON.stringify(row, null, 2))
-  console.log('[DEBUG viewDetail] 温度字段:', row.temperature, '湿度:', row.humidity)
   currentRecord.value = row
   detailDialogVisible.value = true
   
@@ -1727,7 +1829,7 @@ const getGroupImages = () => {
       }
     }
     
-    .image-section, .result-detail, .process-detail {
+    .image-section, .result-detail, .ai-analysis-detail, .process-detail {
       border-radius: 8px;
       box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
       background-color: #fff;
@@ -1870,6 +1972,54 @@ const getGroupImages = () => {
       
       .process-image-container {
         margin-top: 20px;
+      }
+    }
+
+    .ai-analysis-detail {
+      margin-top: 20px;
+
+      .ai-analysis-meta {
+        margin-bottom: 16px;
+      }
+
+      .ai-analysis-content {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .ai-analysis-json {
+        margin-top: 0;
+      }
+
+      .ai-analysis-block {
+        h4 {
+          margin: 0 0 10px;
+        }
+      }
+
+      .ai-analysis-list {
+        margin: 0;
+        padding-left: 20px;
+        color: #606266;
+        line-height: 1.8;
+      }
+
+      .ai-analysis-raw {
+        margin-top: 16px;
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 14px 16px;
+
+        pre {
+          margin: 0;
+          white-space: pre-wrap;
+          word-break: break-word;
+          line-height: 1.7;
+          color: #334155;
+          font-family: inherit;
+        }
       }
     }
     

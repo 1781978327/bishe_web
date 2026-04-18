@@ -19,6 +19,9 @@ export interface DetectionRecord {
   processTime?: string
   createTime: string
   aiDescription?: string
+  aiAnalysisStatus?: string
+  aiAnalysisResult?: string
+  aiAnalysisTime?: string
   processNotes?: string
   audioUrl?: string
   audioDuration?: number

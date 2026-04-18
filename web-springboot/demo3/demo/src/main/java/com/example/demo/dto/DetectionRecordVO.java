@@ -16,10 +16,12 @@ public class DetectionRecordVO {
     private String processTime;
     private String createTime;
     private String aiDescription;
+    private String aiAnalysisStatus;
+    private String aiAnalysisResult;
+    private String aiAnalysisTime;
     private String processNotes;
     // 声音异常专用字段
     private String audioUrl;
     private Float audioDuration;
     private String soundKeywords;
 }
-

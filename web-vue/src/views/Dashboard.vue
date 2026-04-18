@@ -443,7 +443,12 @@ const navigateTo = (path: string) => {
 }
 
 // 传感器数据
-const sensorData = ref({
+const sensorData = ref<{
+  temperature: string | number
+  humidity: string | number
+  smoke: string | number
+  light: string | number
+}>({
   temperature: '--',
   humidity: '--',
   smoke: '--',

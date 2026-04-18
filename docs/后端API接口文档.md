@@ -162,9 +162,9 @@ Content-Type: application/json
 | `name` | string | 是 | 设备名称 |
 | `location` | string | 是 | 安装位置 |
 | `rtspUrl` | string | 是 | RTSP 流地址 |
-| `resolution` | string | 否 | 分辨率，如 `1280x720` |
-| `frameRate` | int | 否 | 帧率，如 `25` |
-| `description` | string | 否 | 设备描述 |
+| `status` | int | 否 | 在线状态，默认 `0` |
+| `isEnabled` | boolean | 否 | 是否启用，默认 `true` |
+| `detectionEnabled` | boolean | 否 | 是否启用检测，默认 `true` |
 
 **响应示例：**
 
@@ -177,11 +177,9 @@ Content-Type: application/json
     "name": "教学楼入口",
     "location": "教学楼1层",
     "rtspUrl": "rtsp://192.168.1.100:554/stream1",
-    "resolution": "1280x720",
-    "frameRate": 25,
     "status": 1,
     "isEnabled": true,
-    "detectionEnabled": false,
+    "detectionEnabled": true,
     "createTime": "2026-04-04T10:00:00"
   }
 }
@@ -310,7 +308,7 @@ Authorization: Bearer {token}
   "code": 200,
   "msg": "操作成功",
   "data": [
-    { "id": 1, "name": "教学楼入口", "status": 1, "lastOnlineTime": "2026-04-04T12:00:00" }
+    { "id": 1, "name": "教学楼入口", "location": "教学楼1层", "status": 1 }
   ]
 }
 ```
@@ -480,7 +478,6 @@ Authorization: Bearer {token}
 
 ```
 POST /detection/record/sound/report
-Authorization: Bearer {token}
 Content-Type: application/json
 ```
 
@@ -501,7 +498,7 @@ Content-Type: application/json
 ## 五、环境监测接口 `/sensor`
 
 > Base URL: `http://localhost:8080/api/sensor`
-> 所有接口均需登录认证。
+> 当前代码中这些接口已放开，无需登录认证。
 
 ### 5.1 获取最新传感器数据
 
@@ -522,11 +519,6 @@ Authorization: Bearer {token}
     "humidity": 65.0,
     "smoke": 50.0,
     "light": 450.0,
-    "temperatureThreshold": 35.0,
-    "humidityThreshold": 80.0,
-    "smokeThreshold": 100.0,
-    "lightThreshold": 500.0,
-    "isAlert": false,
     "alertMessage": null,
     "createTime": "2026-04-04T12:00:00"
   }
@@ -674,6 +666,14 @@ Authorization: Bearer {token}
 GET /sound/status
 Authorization: Bearer {token}
 ```
+
+补充实时接口：
+
+- `GET /sound/realtime/status` 获取实时监测状态
+- `GET /sound/realtime/events` 获取异常事件队列
+- `GET /sound/realtime/windows?limit=5` 获取最近 5 个实时检测窗口状态，不只包含异常窗口
+- `POST /sound/realtime/start` 启动实时监测
+- `POST /sound/realtime/stop` 停止实时监测
 
 ---
 
@@ -1025,7 +1025,6 @@ GET /api/test/health
 | `id` | BIGINT | 主键，自增 |
 | `camera_id` | BIGINT | 摄像头ID（环境=0，声音=-1） |
 | `camera_name` | VARCHAR(100) | 摄像头名称 |
-| `location` | VARCHAR(200) | 安装位置 |
 | `detection_time` | DATETIME(6) | 检测时间 |
 | `ai_description` | TEXT | AI 检测结果描述 |
 | `image_url` | VARCHAR(500) | 检测图片URL |
@@ -1049,11 +1048,6 @@ GET /api/test/health
 | `humidity` | FLOAT | 湿度（%） |
 | `smoke` | FLOAT | 烟雾浓度（ppm） |
 | `light` | FLOAT | 光照强度（lux） |
-| `temperature_threshold` | FLOAT | 温度阈值 |
-| `humidity_threshold` | FLOAT | 湿度阈值 |
-| `smoke_threshold` | FLOAT | 烟雾阈值 |
-| `light_threshold` | FLOAT | 光照阈值 |
-| `is_alert` | BIT(1) | 是否报警 |
 | `alert_message` | VARCHAR(500) | 报警信息 |
 | `create_time` | DATETIME(6) | 记录时间 |
 
@@ -1067,18 +1061,30 @@ GET /api/test/health
 | `name` | VARCHAR(100) | 设备名称 |
 | `location` | VARCHAR(200) | 安装位置 |
 | `rtsp_url` | VARCHAR(500) | RTSP 流地址 |
-| `resolution` | VARCHAR(50) | 分辨率 |
-| `frame_rate` | INT | 帧率 |
 | `status` | INT | 在线状态（1=在线，0=离线） |
 | `is_enabled` | BIT(1) | 是否启用 |
 | `detection_enabled` | BIT(1) | 是否启用检测 |
-| `last_online_time` | DATETIME(6) | 最后在线时间 |
 | `create_time` | DATETIME(6) | 创建时间 |
 | `update_time` | DATETIME(6) | 更新时间 |
 
 ---
 
-### 10.4 sound_event（声音事件表）
+### 10.4 rknn_model_profiles（模型资料表）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | BIGINT | 主键，自增 |
+| `username` | VARCHAR(64) | 所属用户名 |
+| `base_name` | VARCHAR(200) | 模型基名 |
+| `model_object_key` | VARCHAR(500) | `.rknn` 文件对象键 |
+| `label_object_key` | VARCHAR(500) | `.txt` 标签文件对象键 |
+| `selected` | BIT(1) | 是否被选中 |
+| `create_time` | DATETIME(6) | 创建时间 |
+| `update_time` | DATETIME(6) | 更新时间 |
+
+---
+
+### 10.5 sound_event（声音事件表）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -1094,7 +1100,7 @@ GET /api/test/health
 
 ---
 
-### 10.5 users（用户表）
+### 10.6 users（用户表）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -1104,7 +1110,7 @@ GET /api/test/health
 | `real_name` | VARCHAR(50) | 真实姓名 |
 | `phone` | VARCHAR(20) | 手机号 |
 | `email` | VARCHAR(100) | 电子邮箱 |
-| `role` | INT | 角色（1=管理员，2=普通用户） |
+| `role` | INT | 角色（1=管理员，0=普通用户） |
 | `status` | INT | 状态（1=启用，0=禁用） |
 | `avatar_url` | VARCHAR(255) | 头像URL |
 | `create_time` | DATETIME(6) | 创建时间 |
@@ -1112,7 +1118,7 @@ GET /api/test/health
 
 ---
 
-### 10.6 sensor_threshold（传感器阈值表）
+### 10.7 sensor_threshold（传感器阈值表）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|

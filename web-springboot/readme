@@ -64,3 +64,56 @@ curl http://127.0.0.1:8080/api/rknn/status
 - `/api/rknn/status` 会把视觉服务返回中的 `localhost/127.0.0.1` RTSP 地址改写成当前请求主机
 - 模型管理当前支持 `person_2700_i8`、`yolov8s`、`yolov8n` 三个内置模型，以及上传的 `.rknn + .txt`
 - `/api/rknn/forbidden-area` 当前保存在后端内存中，重启 Spring Boot 后会清空
+
+## AI 融合分析
+
+当前后端已经接入统一的 `DetectionRecord` 异步 AI 融合分析：
+
+- 任意一条视频、声音、环境异常记录落库后
+- 后端会异步汇总三个服务的最新上下文
+- 分析结果回写到同一条安全记录
+
+当前实际聚合的内容：
+
+- 触发记录本身
+- 最近 `2` 条传感器历史
+- 当前传感器阈值
+- 最近 `5` 个声音窗口
+- 声音实时状态与实时事件
+- 视觉状态与两路检测计数
+- 记录自带图片，或尽量抓取当前帧补图
+
+当前不是：
+
+- 不会为 AI 额外录一段新的当前音频文件
+- 不会新建一条单独的“AI 记录”
+
+启动前建议设置：
+
+```bash
+export VISION_API_KEY='你的 key'
+export VISION_BASE_URL='https://api.866646.xyz/'
+export RISK_MODEL='qwen3-vl:235b-instruct'
+```
+
+如果你主要用根目录的一键脚本启动，也可以把这几个变量写到本地文件：
+
+```bash
+/home/orangepi/Desktop/web/bishebeifen-master/.runtime/ai.env
+```
+
+内容示例：
+
+```bash
+VISION_API_KEY='你的 key'
+VISION_BASE_URL='https://api.866646.xyz/'
+RISK_MODEL='qwen3-vl:235b-instruct'
+```
+
+`start_all_stack.sh` 现在会自动加载这个文件。
+
+如果改了这些环境变量，而后端已经在运行，建议重启后端；使用 `./gradlew bootRun` 时，必要时先执行：
+
+```bash
+./gradlew --stop
+```

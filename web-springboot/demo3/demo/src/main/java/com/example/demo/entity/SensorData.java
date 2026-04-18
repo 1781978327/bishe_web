@@ -31,21 +31,6 @@ public class SensorData {
     @Column(name = "light")
     private Float light;  // 光照强度 (lux)
     
-    @Column(name = "temperature_threshold")
-    private Float temperatureThreshold = 35.0f;  // 温度阈值
-    
-    @Column(name = "humidity_threshold")
-    private Float humidityThreshold = 80.0f;  // 湿度阈值
-    
-    @Column(name = "smoke_threshold")
-    private Float smokeThreshold = 100.0f;  // 烟雾浓度阈值
-    
-    @Column(name = "light_threshold")
-    private Float lightThreshold = 500.0f;  // 光照强度阈值
-    
-    @Column(name = "is_alert")
-    private Boolean isAlert = false;  // 是否报警
-    
     @Column(name = "alert_message", length = 500)
     private String alertMessage;  // 报警信息
     

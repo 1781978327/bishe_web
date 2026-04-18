@@ -24,6 +24,9 @@ sound.server.host=localhost
 sound.server.port=8089
 rknn.server.host=localhost
 rknn.server.port=8091
+ai.analysis.base-url=${VISION_BASE_URL:https://api.866646.xyz}
+ai.analysis.api-key=${VISION_API_KEY:}
+ai.analysis.model=${RISK_MODEL:qwen3-vl:235b-instruct}
 ```
 
 ## 启动
@@ -119,6 +122,17 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 
 - `eventType` 当前支持 `video`、`sound`、`env`
 - 视觉上报和声音上报会自动写入安全记录
+- 当前安全记录还会额外回写
+  - `aiAnalysisStatus`
+  - `aiAnalysisResult`
+  - `aiAnalysisTime`
+
+当前 AI 融合分析行为：
+
+- 视频、声音、环境三类异常写入 `detection_records` 后自动异步触发
+- 使用 `DetectionRecordAiAnalysisService`
+- 汇总触发记录、最近 `2` 条传感器历史、当前阈值、最近 `5` 个声音窗口、声音实时状态、视觉状态、两路检测计数，以及可用图片
+- 分析结果回写到原记录，不会新建单独的 AI 记录
 
 ### 5. 环境监测
 
@@ -183,6 +197,13 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 - `/rknn/status` 会把返回里的 `rtsp_url_cam0`、`rtsp_url_cam1`、`rtsp_url_mosaic`、`rtsp_url_video` 自动改写成当前请求主机
 - `/rknn/forbidden-area` 当前存储在 `RknnService` 内存里，重启后丢失
 
+禁入区闯入说明：
+
+- 视觉 C++ 服务会定期从 `/api/rknn/forbidden-area?cameraId=1|2` 拉取四边形区域
+- 首次检测到有人进入禁区时，会自动向 `/api/detection/record/rknn/report` 上报 `env_intrusion`
+- 上报体里会附带当前截图 `imageBase64`
+- 后端收到后会自动进入 AI 融合分析链路
+
 ### 8. 模型管理
 
 - `GET /model/list`
@@ -234,6 +255,46 @@ curl http://127.0.0.1:8080/api/rknn/status
 curl -X POST http://127.0.0.1:8080/api/user/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"your_username","password":"your_password"}'
+```
+
+区域闯入快速模拟：
+
+```bash
+python3 - <<'PY'
+import base64, json
+from pathlib import Path
+
+img = Path('/home/orangepi/Desktop/web/bishebeifen-master/测试大模型/R-C.jpg').read_bytes()
+payload = {
+    "cameraId": 1,
+    "detectionResult": json.dumps({
+        "type": "env_intrusion",
+        "cam": 0,
+        "hitCount": 1,
+        "zonePoints": [
+            {"x": 160, "y": 120},
+            {"x": 480, "y": 120},
+            {"x": 480, "y": 400},
+            {"x": 160, "y": 400}
+        ],
+        "objects": [
+            {
+                "label": "person",
+                "cls": 0,
+                "score": 0.93,
+                "center": {"x": 320, "y": 260},
+                "box": {"x1": 240, "y1": 120, "x2": 400, "y2": 420}
+            }
+        ]
+    }, ensure_ascii=False),
+    "imageBase64": base64.b64encode(img).decode("utf-8")
+}
+Path('/tmp/env_intrusion_test.json').write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+PY
+
+curl -X POST http://127.0.0.1:8080/api/detection/record/rknn/report \
+  -H 'Content-Type: application/json' \
+  --data-binary @/tmp/env_intrusion_test.json
 ```
 
 ## 项目结构

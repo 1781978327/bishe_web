@@ -22,11 +22,4 @@ public class CameraCreateRequest {
     private Boolean isEnabled = true; // 默认启用
     
     private Boolean detectionEnabled = true; // 默认开启检测
-    
-    @Size(max = 50, message = "分辨率长度不能超过50个字符")
-    private String resolution;
-    
-    private Integer frameRate;
-    
-    private String description;
 }

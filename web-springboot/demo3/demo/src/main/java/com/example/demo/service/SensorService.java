@@ -38,6 +38,9 @@ public class SensorService {
     @Autowired
     private DetectionRecordRepository detectionRecordRepository;
 
+    @Autowired
+    private DetectionRecordAiAnalysisService detectionRecordAiAnalysisService;
+
     @Autowired(required = false)
     private RestTemplate sensorServerRestTemplate;
 
@@ -136,10 +139,6 @@ public class SensorService {
      */
     public SensorData readSensorDataFromHardware() {
         SensorData data = new SensorData();
-        data.setTemperatureThreshold(thresholds.get("temperature"));
-        data.setHumidityThreshold(thresholds.get("humidity"));
-        data.setSmokeThreshold(thresholds.get("smoke"));
-        data.setLightThreshold(thresholds.get("light"));
 
         boolean success = false;
 
@@ -294,7 +293,6 @@ public class SensorService {
             alertMsg.append("光照强度超过阈值(").append(thresholds.get("light")).append("lux) ");
         }
 
-        data.setIsAlert(isAlert);
         data.setAlertMessage(alertMsg.length() > 0 ? alertMsg.toString() : null);
 
         if (isAlert) {
@@ -325,11 +323,9 @@ public class SensorService {
             record.setCameraId(ENV_MONITOR_CAMERA_ID);
             record.setCameraName(ENV_MONITOR_CAMERA_NAME);
             record.setDetectionTime(now);
-            record.setLevel(2); // 中风险
-            record.setIsViolence(false);
             record.setAiDescription("env_" + alertMessage);
-            record.setLocation("环境监测");
             record.setIsProcessed(false);
+            detectionRecordAiAnalysisService.preparePendingAnalysis(record);
 
             // 添加详细的环境数据（包含阈值信息）
             StringBuilder detail = new StringBuilder();
@@ -343,7 +339,8 @@ public class SensorService {
             detail.append(", 阈值-光照: ").append(thresholds.get("light")).append("lux");
             record.setProcessNotes(detail.toString());
 
-            detectionRecordRepository.save(record);
+            DetectionRecord saved = detectionRecordRepository.save(record);
+            detectionRecordAiAnalysisService.requestAnalysis(saved.getId());
             lastAlertTime = now;
             log.info("已创建环境报警记录: {}", alertMessage);
         } catch (Exception e) {

@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="$ROOT_DIR/.runtime"
 PID_DIR="$RUNTIME_DIR/pids"
 LOG_DIR="$RUNTIME_DIR/logs"
+AI_ENV_FILE="${AI_ENV_FILE:-$RUNTIME_DIR/ai.env}"
 
 FRONTEND_DIR="$ROOT_DIR/web-vue"
 BACKEND_DIR="$ROOT_DIR/web-springboot/demo3/demo"
@@ -24,6 +25,21 @@ DEFAULT_CAM0_SOURCE="/dev/v4l/by-path/platform-fc800000.usb-usb-0:1:1.0-video-in
 DEFAULT_CAM1_SOURCE="/dev/v4l/by-path/platform-fc880000.usb-usb-0:1:1.0-video-index0"
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
+
+load_optional_env_file() {
+  local env_file="$1"
+  if [[ ! -f "$env_file" ]]; then
+    return 0
+  fi
+
+  echo "加载本地环境配置: $env_file"
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+}
+
+load_optional_env_file "$AI_ENV_FILE"
 
 DRY_RUN=0
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -122,6 +138,16 @@ stop_service_if_running() {
   local pidfile="$PID_DIR/${name}.pid"
   local pid=""
 
+  if (( DRY_RUN )); then
+    if [[ -f "$pidfile" ]]; then
+      pid="$(tr -d '[:space:]' < "$pidfile" 2>/dev/null || true)"
+    fi
+    if is_running_pid "$pid"; then
+      echo "[dry-run][$name] 检测到运行中进程，跳过停止 (PID=$pid)"
+    fi
+    return 0
+  fi
+
   if [[ -f "$pidfile" ]]; then
     pid="$(tr -d '[:space:]' < "$pidfile" 2>/dev/null || true)"
   fi
@@ -156,6 +182,10 @@ stop_service_if_running() {
 }
 
 cleanup_vision_residuals() {
+  if (( DRY_RUN )); then
+    echo "[dry-run][vision_http] 跳过残留进程清理"
+    return 0
+  fi
   echo "[vision_http] 清理残留的视觉服务进程..."
   sudo -n pkill -f 'rknn_http_ctrl' 2>/dev/null || true
   sudo -n pkill -f 'mediamtx' 2>/dev/null || true
@@ -163,12 +193,20 @@ cleanup_vision_residuals() {
 }
 
 cleanup_sensor_residuals() {
+  if (( DRY_RUN )); then
+    echo "[dry-run][sensor_http] 跳过残留进程清理"
+    return 0
+  fi
   echo "[sensor_http] 清理残留的传感器服务进程..."
   sudo -n pkill -f 'sensor_reader_http' 2>/dev/null || true
   sleep 1
 }
 
 cleanup_sound_residuals() {
+  if (( DRY_RUN )); then
+    echo "[dry-run][sound_http] 跳过残留进程清理"
+    return 0
+  fi
   echo "[sound_http] 清理残留的声音服务进程..."
   sudo -n pkill -f 'rknn_yamnet_demo_http' 2>/dev/null || true
   sleep 1

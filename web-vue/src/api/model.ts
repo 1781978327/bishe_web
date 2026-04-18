@@ -9,17 +9,14 @@ export interface ModelProfile {
   builtinKey?: string
   modelObjectKey?: string
   labelObjectKey?: string
-  yamlObjectKey?: string
   modelUrl?: string
   labelUrl?: string
-  yamlUrl?: string
   modelPath?: string
   labelPath?: string
   selected: boolean
   ready: boolean
   createTime?: string
   updateTime?: string
-  lastSelectedTime?: string
 }
 
 export const listModelProfiles = () => {
