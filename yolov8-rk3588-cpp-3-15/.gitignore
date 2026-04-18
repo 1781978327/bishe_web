@@ -1,40 +1,18 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
+# Build/install outputs
 /build
 /build_release
 /build_new
 /build_test
 /install
+
+# Dependency/build byproducts
+*.d
+*.o
+*.obj
+*.lo
+*.slo
+*.gch
+*.pch
 
 # Local tooling and generated artifacts
 /.codex
@@ -44,7 +22,3 @@
 /test_ffmpeg
 /test_ffmpeg_bin
 /test_video_read
-
-# Keep the runtime binary in the publish branch and ignore only the oversized demo video.
-!/src/mediamtx
-/video/person.mp4

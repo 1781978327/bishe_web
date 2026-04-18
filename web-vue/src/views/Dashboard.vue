@@ -608,6 +608,44 @@ const toggleSoundDetection = async () => {
   }
 }
 
+const parseBooleanLike = (value: unknown): boolean | null => {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false
+  }
+  return null
+}
+
+const syncObjectDetectionStatusFromServer = async (silent = true): Promise<boolean> => {
+  try {
+    const res = await fetch(`${apiBaseUrl}/rknn/status`)
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+
+    const payload = await res.json()
+    const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload
+    const enabled = parseBooleanLike(data?.inference_enabled)
+    if (enabled === null) {
+      throw new Error('未在状态响应中找到 inference_enabled 字段')
+    }
+
+    objectDetectionEnabled.value = enabled
+    objectThresholds.value.enabled = enabled
+    localStorage.setItem('objectDetectionSettings', JSON.stringify(objectThresholds.value))
+    return true
+  } catch (err) {
+    console.error('[Dashboard] 同步目标检测状态失败:', err)
+    if (!silent) {
+      ElMessage.warning('未获取到视觉模块实时状态，已保留当前开关状态')
+    }
+    return false
+  }
+}
+
 // 触发文件上传
 const triggerFileUpload = () => {
   console.log('[Dashboard] 触发文件上传')
@@ -749,6 +787,7 @@ onMounted(() => {
   fetchThresholds()
   fetchSoundStatus()
   loadObjectThresholds()
+  void syncObjectDetectionStatusFromServer(true)
   startDetectionCountTimer()
   loadForbiddenArea()
   loadForbiddenFrame()
@@ -786,7 +825,12 @@ const toggleObjectDetection = async () => {
     const res = await fetch(url, { method: 'POST' })
     const data = await res.json()
     if (data.code === 200) {
-      objectDetectionEnabled.value = newState
+      const synced = await syncObjectDetectionStatusFromServer(true)
+      if (!synced) {
+        objectDetectionEnabled.value = newState
+        objectThresholds.value.enabled = newState
+        localStorage.setItem('objectDetectionSettings', JSON.stringify(objectThresholds.value))
+      }
       ElMessage.success(newState ? '目标检测已开启' : '目标检测已关闭')
     } else {
       ElMessage.error(data.msg || '操作失败')

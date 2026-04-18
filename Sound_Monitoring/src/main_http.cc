@@ -134,9 +134,10 @@ static ServerConfig config = {
 #define FALLBACK_RT_DEVICE "plughw:CARD=Camera,DEV=0"
 #define RT_CHUNK_DURATION_SEC 3
 #define RT_HOP_SEC 1.5
-#define RT_MERGE_GAP_SEC 2.0
 #define RT_DETECTION_THRESHOLD 0.05
-#define RT_MIN_EVENT_COUNT 2
+#define RT_EVENT_PRE_SEC 3
+#define RT_EVENT_POST_SEC 3
+#define RT_EVENT_CLIP_SEC (RT_EVENT_PRE_SEC + RT_EVENT_POST_SEC)
 #define RT_MAX_EVENTS 100
 #define RT_MAX_KEYWORDS 10
 #define RT_EVENT_QUEUE_SIZE 50
@@ -169,11 +170,15 @@ static volatile int rt_event_count = 0;  // 当前队列事件数
 static struct {
     int active;
     float start_sec;
-    float last_trigger_sec;
+    float trigger_sec;
+    float end_sec;
     char keywords[RT_MAX_KEYWORDS][64];
     int keyword_count;
     float max_score;
     int trigger_count;
+    int post_frames_collected;
+    int post_frames_target;
+    int skip_next_chunk_append;
 } rt_current_event = {0};
 
 // 环形缓冲区
@@ -307,7 +312,7 @@ static int report_to_spring_boot(const char *audio_path, float duration,
 }
 
 // ========== 事件音频存储 ==========
-#define RT_MAX_EVENT_AUDIO_SEC 30  // 每个事件最多保存30秒
+#define RT_MAX_EVENT_AUDIO_SEC RT_EVENT_CLIP_SEC  // 每个事件固定保存 6 秒（前3秒 + 后3秒）
 #define RT_MAX_EVENTS_STORED 100
 static int rt_event_audio_count = 0;
 
@@ -325,19 +330,32 @@ static void event_audio_init() {
     g_event_audio.frames = 0;
 }
 
-static void event_audio_append(float *chunk, int chunk_frames) {
-    if (g_event_audio.frames + chunk_frames > g_event_audio.capacity) {
-        // 超出最大长度，只保留最新部分
-        int drop = g_event_audio.frames + chunk_frames - g_event_audio.capacity;
-        memmove(g_event_audio.data, g_event_audio.data + drop,
-                (g_event_audio.capacity - chunk_frames) * sizeof(float));
-        memcpy(g_event_audio.data + g_event_audio.capacity - chunk_frames,
-               chunk, chunk_frames * sizeof(float));
-        g_event_audio.frames = g_event_audio.capacity;
-    } else {
-        memcpy(g_event_audio.data + g_event_audio.frames, chunk, chunk_frames * sizeof(float));
-        g_event_audio.frames += chunk_frames;
+static void event_audio_append_limited(const float *chunk, int chunk_frames) {
+    if (!g_event_audio.data || !chunk || chunk_frames <= 0) return;
+    if (g_event_audio.frames >= g_event_audio.capacity) return;
+
+    int copy_frames = chunk_frames;
+    if (g_event_audio.frames + copy_frames > g_event_audio.capacity) {
+        copy_frames = g_event_audio.capacity - g_event_audio.frames;
     }
+    if (copy_frames <= 0) return;
+
+    memcpy(g_event_audio.data + g_event_audio.frames, chunk, copy_frames * sizeof(float));
+    g_event_audio.frames += copy_frames;
+}
+
+static void event_audio_append_silence(int chunk_frames) {
+    if (!g_event_audio.data || chunk_frames <= 0) return;
+    if (g_event_audio.frames >= g_event_audio.capacity) return;
+
+    int copy_frames = chunk_frames;
+    if (g_event_audio.frames + copy_frames > g_event_audio.capacity) {
+        copy_frames = g_event_audio.capacity - g_event_audio.frames;
+    }
+    if (copy_frames <= 0) return;
+
+    memset(g_event_audio.data + g_event_audio.frames, 0, copy_frames * sizeof(float));
+    g_event_audio.frames += copy_frames;
 }
 
 static void event_audio_reset() {
@@ -470,6 +488,44 @@ static void rt_ring_free(RingBuffer *rb) {
     rb->write_idx = 0;
 }
 
+static void event_audio_capture_pre_roll(RingBuffer *rb, int pre_frames) {
+    event_audio_reset();
+    if (!g_event_audio.data || !rb || pre_frames <= 0) return;
+
+    int frames_to_copy = pre_frames;
+    if (frames_to_copy > g_event_audio.capacity) {
+        frames_to_copy = g_event_audio.capacity;
+    }
+    if (frames_to_copy <= 0) return;
+
+    int available = rb->size;
+    if (available > frames_to_copy) {
+        available = frames_to_copy;
+    }
+    int missing = frames_to_copy - available;
+    if (missing > 0) {
+        memset(g_event_audio.data, 0, missing * sizeof(float));
+    }
+    if (available > 0) {
+        rt_ring_get_latest(rb, g_event_audio.data + missing, available);
+    }
+    g_event_audio.frames = frames_to_copy;
+}
+
+static void rt_finalize_current_event(int pad_missing_post_roll) {
+    if (!rt_current_event.active) return;
+
+    if (pad_missing_post_roll &&
+        rt_current_event.post_frames_collected < rt_current_event.post_frames_target) {
+        event_audio_append_silence(rt_current_event.post_frames_target -
+                                   rt_current_event.post_frames_collected);
+        rt_current_event.post_frames_collected = rt_current_event.post_frames_target;
+    }
+
+    rt_push_event(rt_current_event.start_sec, rt_current_event.end_sec, rt_current_event.max_score);
+    rt_reset_current_event();
+}
+
 static void *rt_monitor_thread(void *arg) {
     (void)arg;
     rknn_app_context_t *ctx = (rknn_app_context_t *)arg;
@@ -490,13 +546,30 @@ static void *rt_monitor_thread(void *arg) {
     printf("[RT] Monitor thread started, device=%s, rate=%d\n", rt_device, rt_sample_rate);
 
     while (rt_running) {
+        int finalize_after_inference = 0;
         int got = capture_read(rt_cap, frames_per_hop, 1000);
         if (got > 0) {
             float *all_data = capture_get_data(rt_cap);
             int total_frames = capture_get_frames(rt_cap);
             int start = total_frames - got;
             if (all_data && start >= 0) {
+                const float *latest_frames = all_data + start;
                 rt_ring_push(&rt_ring, all_data + start, got);
+
+                if (rt_current_event.active) {
+                    if (rt_current_event.skip_next_chunk_append) {
+                        rt_current_event.skip_next_chunk_append = 0;
+                    } else if (rt_current_event.post_frames_collected < rt_current_event.post_frames_target) {
+                        int copy_frames = got;
+                        int remain = rt_current_event.post_frames_target - rt_current_event.post_frames_collected;
+                        if (copy_frames > remain) copy_frames = remain;
+                        event_audio_append_limited(latest_frames, copy_frames);
+                        rt_current_event.post_frames_collected += copy_frames;
+                        if (rt_current_event.post_frames_collected >= rt_current_event.post_frames_target) {
+                            finalize_after_inference = 1;
+                        }
+                    }
+                }
             }
         }
 
@@ -554,47 +627,46 @@ static void *rt_monitor_thread(void *arg) {
 
                 if (is_anom) {
                     rt_anomaly_count++;
-                    // 记录异常音频
-                    event_audio_append(chunk_data, frames_per_chunk);
 
                     if (!rt_current_event.active) {
+                        event_audio_capture_pre_roll(&rt_ring, frames_per_chunk);
                         rt_current_event.active = 1;
-                        rt_current_event.start_sec = current_ts - RT_CHUNK_DURATION_SEC;
-                        rt_current_event.last_trigger_sec = current_ts;
+                        rt_current_event.start_sec = current_ts - RT_EVENT_PRE_SEC;
+                        if (rt_current_event.start_sec < 0.0f) {
+                            rt_current_event.start_sec = 0.0f;
+                        }
+                        rt_current_event.trigger_sec = current_ts;
+                        rt_current_event.end_sec = current_ts + RT_EVENT_POST_SEC;
                         rt_current_event.keyword_count = 0;
                         rt_current_event.max_score = matched_score;
                         rt_current_event.trigger_count = 1;
+                        rt_current_event.post_frames_collected = 0;
+                        rt_current_event.post_frames_target = (int)(rt_sample_rate * RT_EVENT_POST_SEC);
+                        rt_current_event.skip_next_chunk_append = 1;
                         rt_add_keyword(rt_current_event.keywords, &rt_current_event.keyword_count, matched_kw);
+                        printf("[RT EVENT] 异常已触发，开始截取 %.1fs 前置 + %.1fs 后置音频\n",
+                               (float)RT_EVENT_PRE_SEC, (float)RT_EVENT_POST_SEC);
                     } else {
-                        rt_current_event.last_trigger_sec = current_ts;
                         rt_current_event.trigger_count++;
                         rt_add_keyword(rt_current_event.keywords, &rt_current_event.keyword_count, matched_kw);
-                        if (matched_score > rt_current_event.max_score)
+                        if (matched_score > rt_current_event.max_score) {
                             rt_current_event.max_score = matched_score;
-                    }
-                } else {
-                    if (rt_current_event.active) {
-                        float gap = current_ts - rt_current_event.last_trigger_sec;
-                        if (gap >= RT_MERGE_GAP_SEC && rt_current_event.trigger_count >= RT_MIN_EVENT_COUNT) {
-                            rt_push_event(rt_current_event.start_sec,
-                                rt_current_event.last_trigger_sec + RT_CHUNK_DURATION_SEC,
-                                rt_current_event.max_score);
                         }
-                        rt_reset_current_event();
                     }
                 }
+            }
+
+            if (finalize_after_inference && rt_current_event.active) {
+                rt_finalize_current_event(0);
             }
         }
         usleep(50000);
     }
 
     // 最终化最后一个事件
-    if (rt_current_event.active && rt_current_event.trigger_count >= RT_MIN_EVENT_COUNT) {
-        rt_push_event(rt_current_event.start_sec,
-            rt_current_event.last_trigger_sec + RT_CHUNK_DURATION_SEC,
-            rt_current_event.max_score);
+    if (rt_current_event.active) {
+        rt_finalize_current_event(1);
     }
-    rt_reset_current_event();
     rt_ring_free(&rt_ring);
 
     printf("[RT] Monitor thread exited\n");

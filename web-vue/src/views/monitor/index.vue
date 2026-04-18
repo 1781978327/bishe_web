@@ -2152,7 +2152,7 @@ const showScrollbar = computed(() => {
   return displayCameras.value.length > 0
 })
 
-const streamProtocol = (((import.meta.env.VITE_STREAM_PROTOCOL as string | undefined) || 'hls')).toLowerCase()
+const streamProtocol = (((import.meta.env.VITE_STREAM_PROTOCOL as string | undefined) || 'webrtc')).toLowerCase()
 const isWebRtcStream = streamProtocol === 'webrtc'
 
 const sleep = (ms: number) => new Promise<void>((resolve) => {
@@ -2281,7 +2281,7 @@ const startRtspStream = async (): Promise<boolean> => {
     try {
       const res = await fetch('/api/rknn/rtsp/camera/start', { method: 'POST' })
       const data = await res.json()
-      if (data.code === 200) {
+      if (isRknnOperationSuccess(data)) {
         console.log('RTSP推流已自动开启')
         return true
       }

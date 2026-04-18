@@ -1,0 +1,7 @@
+# Allow the vision service to publish arbitrary RTSP paths like cam0/cam1/cam2.
+pathDefaults:
+  source: publisher
+  overridePublisher: true
+
+paths:
+  all_others:

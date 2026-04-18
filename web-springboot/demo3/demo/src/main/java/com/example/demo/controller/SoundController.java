@@ -20,9 +20,14 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @RestController
@@ -328,7 +333,7 @@ public class SoundController {
     @GetMapping("/audio")
     public ResponseEntity<Resource> getAudio(@RequestParam String path) {
         try {
-            File file = new File(path);
+            File file = resolveAudioFile(path);
             if (!file.exists()) {
                 return ResponseEntity.notFound().build();
             }
@@ -350,5 +355,44 @@ public class SoundController {
             log.error("获取音频文件失败", e);
             return ResponseEntity.internalServerError().build();
         }
+    }
+
+    private File resolveAudioFile(String rawPath) {
+        if (rawPath == null || rawPath.isBlank()) {
+            return new File("");
+        }
+
+        Path requested = Paths.get(rawPath.trim()).normalize();
+        if (requested.isAbsolute()) {
+            return requested.toFile();
+        }
+
+        String normalized = rawPath.trim().replace("\\", "/");
+        if (normalized.startsWith("./")) {
+            normalized = normalized.substring(2);
+        }
+
+        Path userDir = Paths.get(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
+        List<Path> searchRoots = new ArrayList<>();
+        Path cursor = userDir;
+        for (int i = 0; i < 8 && cursor != null; i++) {
+            searchRoots.add(cursor);
+            searchRoots.add(cursor.resolve("Sound_Monitoring").resolve("src").resolve("build"));
+            searchRoots.add(cursor.resolve("Sound_Monitoring").resolve("build"));
+            cursor = cursor.getParent();
+        }
+
+        Set<Path> candidates = new LinkedHashSet<>();
+        for (Path root : searchRoots) {
+            candidates.add(root.resolve(normalized).normalize());
+        }
+
+        for (Path candidate : candidates) {
+            if (Files.exists(candidate) && Files.isRegularFile(candidate)) {
+                return candidate.toFile();
+            }
+        }
+
+        return requested.toFile();
     }
 }

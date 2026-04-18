@@ -69,21 +69,18 @@
                 <div class="custom-option">
                   <el-icon><VideoCamera /></el-icon>
                   <span>监控异常</span>
-                  <el-tag type="warning" size="small" class="ml-2">摔倒</el-tag>
                 </div>
               </el-option>
               <el-option value="sound" label="声音异常">
                 <div class="custom-option">
                   <el-icon><Bell /></el-icon>
                   <span>声音异常</span>
-                  <el-tag type="danger" size="small" class="ml-2">哭泣</el-tag>
                 </div>
               </el-option>
               <el-option value="env" label="环境异常">
                 <div class="custom-option">
                   <el-icon><Cloudy /></el-icon>
                   <span>环境异常</span>
-                  <el-tag type="danger" size="small" class="ml-2">烟雾</el-tag>
                 </div>
               </el-option>
             </el-select>
@@ -138,14 +135,6 @@
       >
         <el-table-column type="selection" width="55" fixed="left" />
         <el-table-column type="index" width="60" label="#" fixed="left" align="center" />
-        <el-table-column prop="cameraName" label="摄像头" min-width="120" show-overflow-tooltip>
-          <template #default="{ row }">
-            <div class="camera-name">
-              <el-icon><VideoCamera /></el-icon>
-              <span>{{ row.cameraName }}</span>
-            </div>
-          </template>
-        </el-table-column>
         <el-table-column label="监测时间" min-width="160" sortable>
           <template #default="{ row }">
             <div class="time-cell">
@@ -770,13 +759,16 @@ const isSoundRecord = computed(() => {
 // 获取音频播放URL（处理本地路径）
 const getAudioUrl = computed(() => {
   if (!currentRecord.value?.audioUrl) return ''
-  const audioPath = currentRecord.value.audioUrl
-  // 如果是本地文件路径，转换为API URL
-  if (audioPath.startsWith('/home/orangepi')) {
-    // 返回带 API 前缀的音频访问路径
-    return '/api/sound/audio?path=' + encodeURIComponent(audioPath)
+  const audioPath = currentRecord.value.audioUrl.trim()
+  if (!audioPath) return ''
+
+  // 已经是可直接访问的 URL 时，原样返回
+  if (/^(https?:)?\/\//i.test(audioPath) || audioPath.startsWith('data:')) {
+    return audioPath
   }
-  return audioPath
+
+  // 本地绝对路径、相对路径（如 ./alarm_audio/...）统一交给后端解析
+  return '/api/sound/audio?path=' + encodeURIComponent(audioPath)
 })
 
 // 格式化音频时长

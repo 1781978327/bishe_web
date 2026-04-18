@@ -9,7 +9,7 @@
       </template>
 
       <p class="hint">
-        内置模型 <code>yolov8s</code>、<code>yolov8n</code> 可直接选择使用。
+        内置模型 <code>person_2700_i8</code>、<code>yolov8s</code>、<code>yolov8n</code> 可直接选择使用。
         <br />
         同时上传 <code>.rknn</code> 模型文件和对应的 <code>.txt</code> 标签文件，两者须保持同名（扩展名不同）。
         上传后会自动建立模型与标签关联，选择模型时后端会自动把模型和标签下发给视觉服务。

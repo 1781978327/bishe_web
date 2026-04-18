@@ -20,6 +20,9 @@ export interface DetectionRecord {
   createTime: string
   aiDescription?: string
   processNotes?: string
+  audioUrl?: string
+  audioDuration?: number
+  soundKeywords?: string
 }
 
 /**

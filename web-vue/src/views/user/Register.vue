@@ -4,7 +4,7 @@
     <div class="register-box">
       <div class="register-header">
         <div class="logo-section">
-          <img src="@/assets/images/logo.png" alt="系统Logo" class="logo-img" />
+          <img src="@/assets/images/logo.svg" alt="系统Logo" class="logo-img" />
         </div>
         <h2 class="system-title">系统账号注册</h2>
         <p class="system-subtitle">创建您的安全监控账户</p>

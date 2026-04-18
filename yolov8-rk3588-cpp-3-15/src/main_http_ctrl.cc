@@ -66,8 +66,8 @@
 #define DEFAULT_HTTP_PORT  8091
 #define DEFAULT_RTSP_HOST "127.0.0.1"
 #define DEFAULT_RTSP_PORT 8554
-#define DEFAULT_MODEL_PATH "../model/RK3588/yolov8s.rknn"
-#define DEFAULT_LABEL_REL_PATH "model/coco_80_labels_list.txt"
+#define DEFAULT_MODEL_PATH "../model/RK3588/person_2700_i8.rknn"
+#define DEFAULT_LABEL_REL_PATH "model/person_2700_i8.txt"
 #define DEFAULT_MEDIAMTX_REL_PATH "src/mediamtx"
 #define DEFAULT_MEDIAMTX_LOG "/tmp/mediamtx_auto.log"
 #define DEFAULT_RECORD_OUTPUT_REL_PATH "recordings/camera"
@@ -2559,12 +2559,14 @@ std::string detect_model_path_locked() {
 
     std::vector<std::string> candidates = {
         DEFAULT_MODEL_PATH,
+        "../model/RK3588/yolov8s.rknn",
         "../model/RK3588/yolov8n.rknn",
         "../model/RK3588/yolov8m.rknn"
     };
     {
         std::string root = detect_project_root();
         if (!root.empty()) {
+            candidates.push_back(path_join(root, "model/RK3588/person_2700_i8.rknn"));
             candidates.push_back(path_join(root, "model/RK3588/yolov8s.rknn"));
             candidates.push_back(path_join(root, "model/RK3588/yolov8n.rknn"));
             candidates.push_back(path_join(root, "model/RK3588/yolov8m.rknn"));
@@ -2596,8 +2598,11 @@ std::string detect_model_path_locked() {
     std::sort(candidates.begin(), candidates.end());
     candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
 
-    // 让 yolov8s 优先被选中
+    // 让 person_2700_i8 作为默认模型，yolov8s 继续作为回退首选
     std::stable_sort(candidates.begin(), candidates.end(), [](const std::string& a, const std::string& b) {
+        bool a_person = a.find("person_2700_i8") != std::string::npos;
+        bool b_person = b.find("person_2700_i8") != std::string::npos;
+        if (a_person != b_person) return a_person;
         bool a_s = a.find("yolov8s") != std::string::npos;
         bool b_s = b.find("yolov8s") != std::string::npos;
         if (a_s != b_s) return a_s;

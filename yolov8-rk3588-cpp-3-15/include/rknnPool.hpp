@@ -350,11 +350,55 @@ static bool load_labels_from_txt(const std::string& label_path) {
     return true;
 }
 
+static bool load_model_specific_labels(const std::string& model_path, const std::string& model_name) {
+    if (model_name.empty()) return false;
+
+    std::string stem = model_name;
+    size_t dot = stem.find_last_of('.');
+    if (dot != std::string::npos) {
+        stem = stem.substr(0, dot);
+    }
+    if (stem.empty()) return false;
+
+    std::vector<std::string> candidates;
+
+    std::string project_candidate = resolve_project_file_path("model/" + stem + ".txt");
+    if (!project_candidate.empty()) candidates.push_back(project_candidate);
+
+    if (!model_path.empty()) {
+        size_t sep = model_path.find_last_of("/\\");
+        if (sep != std::string::npos) {
+            std::string model_dir = model_path.substr(0, sep);
+            candidates.push_back(join_path_copy(model_dir, stem + ".txt"));
+
+            size_t parent_sep = model_dir.find_last_of("/\\");
+            if (parent_sep != std::string::npos) {
+                std::string parent_dir = model_dir.substr(0, parent_sep);
+                candidates.push_back(join_path_copy(parent_dir, stem + ".txt"));
+            }
+        }
+    }
+
+    candidates.push_back("../model/" + stem + ".txt");
+    candidates.push_back("./model/" + stem + ".txt");
+
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+    for (const auto& candidate : candidates) {
+        if (load_labels_from_txt(candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // 加载标签文件：自动检测模型对应的标签文件
 // yolov8n/yolov8s/yolov8m → 使用 coco_80_labels_list.txt
 // 行人摔倒.rknn → 使用同目录下的 Untitled 文件或默认4类标签
 static void load_labels(const char* model_path) {
-    std::string model_name = model_path ? model_path : "";
+    std::string model_path_text = model_path ? model_path : "";
+    std::string model_name = model_path_text;
     size_t pos = model_name.find_last_of("/\\");
     if (pos != std::string::npos) {
         model_name = model_name.substr(pos + 1);
@@ -377,6 +421,11 @@ static void load_labels(const char* model_path) {
             return;
         }
         printf("警告: 指定标签文件不可用，回退默认标签: %s\n", override_path.c_str());
+    }
+
+    if (load_model_specific_labels(model_path_text, model_name)) {
+        g_label_cache_key = cache_key;
+        return;
     }
 
     // 默认优先使用 coco 标签 txt

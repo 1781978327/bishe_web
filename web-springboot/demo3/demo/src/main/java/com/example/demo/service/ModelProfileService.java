@@ -29,6 +29,7 @@ public class ModelProfileService {
     private static final String BUILTIN_SOURCE = "builtin";
     private static final String UPLOAD_SOURCE = "upload";
     private static final List<BuiltinModelDefinition> BUILTIN_MODEL_DEFINITIONS = List.of(
+            new BuiltinModelDefinition(-3L, "builtin:person_2700_i8", "person_2700_i8", "model/RK3588/person_2700_i8.rknn", "model/person_2700_i8.txt"),
             new BuiltinModelDefinition(-1L, "builtin:yolov8s", "yolov8s", "model/RK3588/yolov8s.rknn", "model/coco_80_labels_list.txt"),
             new BuiltinModelDefinition(-2L, "builtin:yolov8n", "yolov8n", "model/RK3588/yolov8n.rknn", "model/coco_80_labels_list.txt")
     );

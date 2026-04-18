@@ -1,66 +1,110 @@
 # 嵌入式多目标追踪与智能预警系统
 
-基于 `Vue 3 + Spring Boot + RK3588 RKNN` 的一体化校园安全监测系统，当前整合了三条主线能力：
+以 HTTP 联调为主线的校园安全监测项目。当前代码里的主链路是：
 
-- 视觉监控：双路摄像头推理、目标跟踪、禁入区、RTSP / WebRTC 播放、摄像头录像、双路融合画面推流
-- 声音异常：声音分析服务与异常记录联动
-- 环境监测：温湿度、烟雾、光照等传感器读取与展示
+- 浏览器访问 `web-vue`
+- 前端主要请求 Spring Boot `http://<host>:8080/api`
+- Spring Boot 再分别对接 3 个本地 HTTP 服务
+  - 环境传感器：`8088`
+  - 声音异常：`8089`
+  - RKNN 视觉：`8091`
+- 视觉服务通过 MediaMTX 继续提供 `RTSP / HLS / WebRTC(WHEP)` 流
 
 ## 项目结构
 
 ```text
 bishebeifen-master/
-├── web-vue/                     # 前端项目（Vue 3 + Vite）
-├── web-springboot/              # 后端项目（Spring Boot）
-├── yolov8-rk3588-cpp-3-15/      # RK3588 视觉推理与流媒体服务
-├── Sound_Monitoring/            # 声音监测服务
-├── docs/                        # 接口文档
-└── 环境监测系统说明文档.md       # 传感器系统说明
+├── README.md
+├── web-vue/                     # Vue 3 + Vite 前端
+├── web-springboot/              # Spring Boot 后端
+├── Hardware/                    # 环境传感器 HTTP 服务
+├── Sound_Monitoring/            # 声音异常 HTTP 服务
+├── yolov8-rk3588-cpp-3-15/      # RK3588 视觉 HTTP / RTSP 服务
+├── docs/                        # 辅助接口文档
+├── start_all_stack.sh           # 一键启动脚本
+└── stop_all_stack.sh            # 一键停止脚本
 ```
 
-## 技术栈
+## 当前 HTTP 拓扑
 
-### 前端
-- Vue 3
-- TypeScript
-- Element Plus
-- Vite
-- Pinia
-- ECharts
-- HLS / WebRTC 播放
-
-### 后端
-- Java 17
-- Spring Boot 3.2
-- Spring Security + JWT
-- Spring Data JPA
-- MySQL 8
-- WebSocket
-
-### 视觉服务
-- RK3588 NPU / RKNN
-- OpenCV
-- FFmpeg + RKMPP
-- RGA
-- MediaMTX
+| 调用方 | 被调用方 | 用途 |
+|---|---|---|
+| 浏览器 | `http://<host>:3000` | 访问 Vue 前端 |
+| 前端 | `http://<host>:8080/api` | 统一业务入口 |
+| Spring Boot | `http://localhost:8088` | 读取传感器 `/sensor` |
+| Spring Boot | `http://localhost:8089` | 声音检测、实时状态、实时事件 |
+| Spring Boot | `http://localhost:8091` | 视觉推理、录像、抓帧、阈值、状态 |
+| 浏览器 | `rtsp://<host>:8554/*` | RTSP 拉流 |
+| 浏览器 | `http://<host>:8888/*` | HLS 播放 |
+| 浏览器 | `http://<host>:8889/*/whep` | WebRTC(WHEP) 播放 |
 
 ## 端口约定
 
 | 服务 | 端口 | 说明 |
-|------|------|------|
-| 前端 `web-vue` | `3000` | Vite 开发服务 |
-| 后端 `web-springboot` | `8080` | Spring Boot，带 `/api` 上下文 |
-| 视觉服务 `rknn_http_ctrl` | `8091` | RKNN HTTP 控制服务 |
-| RTSP | `8554` | MediaMTX RTSP |
-| HLS | `8888` | MediaMTX HLS |
-| WebRTC(WHEP) | `8889` | MediaMTX WebRTC |
-| WebRTC ICE | `8189/udp` | MediaMTX ICE |
+|---|---:|---|
+| `web-vue` | `3000` | 前端开发服务 |
+| `web-springboot` | `8080` | 后端，带 `/api` 上下文 |
+| `sensor_reader_http` | `8088` | 传感器 HTTP 服务 |
+| `rknn_yamnet_demo_http` | `8089` | 声音 HTTP 服务 |
+| `rknn_http_ctrl` | `8091` | 视觉 HTTP 服务 |
+| MediaMTX RTSP | `8554` | RTSP |
+| MediaMTX HLS | `8888` | HLS |
+| MediaMTX WebRTC | `8889` | WHEP |
+| MediaMTX ICE | `8189/udp` | WebRTC ICE |
 
-## 快速开始
+## 启动顺序
 
-推荐按下面顺序启动。
+### 0. 前置依赖
 
-### 1. 启动视觉服务
+- `MySQL 8`
+- `JDK 17`
+- `Node.js 18+`
+- 板端依赖：`wiringPi`、`libmicrohttpd-dev`、OpenCV、FFmpeg、RGA、RKNN 运行库等
+
+### 1. 启动环境传感器 HTTP 服务
+
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master/Hardware
+sudo ./sensor_reader_http
+```
+
+自检：
+
+```bash
+curl http://127.0.0.1:8088/health
+curl http://127.0.0.1:8088/sensor
+```
+
+### 2. 启动声音 HTTP 服务
+
+推荐先编译：
+
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring
+./scripts/build.sh
+```
+
+再运行：
+
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/build
+export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
+sudo ./rknn_yamnet_demo_http 8089
+```
+
+说明：
+
+- `scripts/build.sh` 默认产物在 `Sound_Monitoring/build`
+- 根目录 `start_all_stack.sh` 优先尝试 `Sound_Monitoring/src/build`，如目录不同可显式设置 `SOUND_DIR`
+
+自检：
+
+```bash
+curl http://127.0.0.1:8089/health
+curl http://127.0.0.1:8089/realtime/status
+```
+
+### 3. 启动视觉 HTTP 服务
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_release
@@ -69,233 +113,128 @@ sudo ./rknn_http_ctrl --cam0-source /dev/video0 --cam1-source /dev/video2
 
 说明：
 
-- 推荐从 `build_release` 目录启动，这样自动拉起的 `mediamtx` 会正确读取 `build_release/mediamtx.yml`
-- 默认会自动启动 MediaMTX，并开放 `8554 / 8889 / 8189`
+- 推荐从 `build_release` 启动，自动拉起的 `mediamtx` 会优先读取 `build_release/mediamtx.yml`
+- 视觉服务直连端口是 `8091`
 
-### 2. 启动后端
+自检：
+
+```bash
+curl http://127.0.0.1:8091/api/status
+```
+
+### 4. 启动 Spring Boot
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 ./gradlew bootRun
 ```
 
-说明：
+后端入口：
 
-- `./gradlew` 已默认指向项目内预装的 `gradle-8.14.1`
-- 后端基地址为 `http://127.0.0.1:8080/api`
+- `http://127.0.0.1:8080/api`
 
-### 3. 启动前端
+自检：
+
+```bash
+curl http://127.0.0.1:8080/api/test/health
+curl http://127.0.0.1:8080/api/rknn/status
+```
+
+### 5. 启动前端
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-vue
-npm run dev -- --host 0.0.0.0
+npm install
+npm run dev -- --host 0.0.0.0 --port 3000
 ```
 
-访问地址：
+访问：
 
 - 本机：`http://127.0.0.1:3000`
 - 局域网：`http://<当前机器IP>:3000`
 
+### 6. 可选：一键脚本
+
+在三类下游二进制都已准备好的前提下，可以直接使用：
+
+```bash
+./start_all_stack.sh
+./stop_all_stack.sh
+```
+
 ## 联调自检
 
-### 1. 检查端口
-
 ```bash
-ss -ltnup | grep -E '3000|8080|8091|8554|8889|8189'
-```
-
-### 2. 检查视觉服务状态
-
-```bash
+ss -ltnup | grep -E '3000|8080|8088|8089|8091|8554|8888|8889|8189'
+curl http://127.0.0.1:8088/sensor
+curl http://127.0.0.1:8089/health
 curl http://127.0.0.1:8091/api/status
-curl http://127.0.0.1:8080/api/rknn/status
+curl http://127.0.0.1:8080/api/test/health
 ```
 
-### 3. 开推理与推流
+打开视觉推理与推流：
 
 ```bash
 curl -X POST "http://127.0.0.1:8080/api/rknn/inference/on?track=true&tracker=bytetrack"
 curl -X POST "http://127.0.0.1:8080/api/rknn/rtsp/camera/start"
 ```
 
-## 融合推流
+## 主要业务入口
 
-视觉服务现在除了原有三路 RTSP 外，还会额外输出一路双路拼接流：
+### 后端主要入口
 
-- `cam0`: `rtsp://<当前机器IP>:8554/cam0`
-- `cam1`: `rtsp://<当前机器IP>:8554/cam1`
-- `cam2`: `rtsp://<当前机器IP>:8554/cam2`
-- `cam3`: `rtsp://<当前机器IP>:8554/cam3`（视频文件模式）
+- `POST /api/user/login`
+- `POST /api/user/register`
+- `POST /api/user/logout`
+- `PUT /api/user`
+- `GET/PUT/POST /api/sensor/*`
+- `GET/POST /api/sound/*`
+- `GET/POST /api/rknn/*`
+- `GET/POST /api/model/*`
+- `GET/POST/DELETE /api/file/*`
+- `GET/PUT/DELETE /api/detection/record/*`
 
-其中：
+### 视觉链路
 
-- `cam2` 是 `cam0 + cam1` 左右拼接后的融合画面
-- 当前输出规格为 `H.264 1280x480 @ 30fps`
-- 融合画面用于浏览与展示，不参与当前的录像控制入口
+- 视觉服务 RTSP
+  - `rtsp://<host>:8554/cam0`
+  - `rtsp://<host>:8554/cam1`
+  - `rtsp://<host>:8554/cam2`
+  - `rtsp://<host>:8554/cam3`
+- 前端默认会把 RTSP 地址自动转换成 WHEP 地址
+  - `http://<host>:8889/cam0/whep`
+  - `http://<host>:8889/cam1/whep`
+  - `http://<host>:8889/cam2/whep`
 
-可用下面命令快速探测：
+### 模型管理
 
-```bash
-ffprobe -v error -rtsp_transport tcp \
-  -show_entries stream=codec_name,width,height,avg_frame_rate \
-  -of default=noprint_wrappers=1 \
-  rtsp://127.0.0.1:8554/cam2
-```
+当前后端内置模型：
 
-## 录像功能
-
-当前录像链路已经打通到三层：
-
-- 视觉服务：负责真正录像，文件默认落在 `yolov8-rk3588-cpp-3-15/recordings/camera`
-- Spring Boot：提供录像状态、开始/停止、文件列表、文件下载代理
-- 前端实时监控：提供“录像摄像头”选择框、“开始/停止录像”按钮和“录像文件”弹窗
-
-常用后端接口：
-
-```bash
-curl http://127.0.0.1:8080/api/rknn/record/status
-curl -X POST "http://127.0.0.1:8080/api/rknn/record/start?cameraId=1"
-curl -X POST "http://127.0.0.1:8080/api/rknn/record/stop?cameraId=1"
-curl "http://127.0.0.1:8080/api/rknn/record/files?cameraId=1"
-curl -O -J "http://127.0.0.1:8080/api/rknn/record/file?name=cam0_20260410_183910.mp4"
-```
-
-## 模型说明
-
-当前后端模型管理同时支持两类来源：
-
-### 1. 内置模型
-
-不依赖上传即可直接切换：
-
+- `person_2700_i8`
 - `yolov8s`
 - `yolov8n`
 
-两者默认共用：
+上传模型仍走 `.rknn + 同名 .txt` 配对方式，选择模型时由后端把绝对路径下发给视觉服务。
 
-- `yolov8-rk3588-cpp-3-15/model/coco_80_labels_list.txt`
+## 前端现状说明
 
-### 2. 用户上传模型
+- 当前主路由：`/login`、`/register`、`/dashboard`、`/profile`、`/monitor`、`/detection/record`、`/model/upload`、`/admin`、`/admin/users`
+- 监控页默认播放协议是 `WebRTC`，不是 `HLS`
+- `camera/index.vue` 组件仍存在，但当前 `/camera` 路由会直接重定向到 `/dashboard`
+- `src/api/user.ts` 里还保留了 `/user/page`、`/user/{id}`、`/user/password` 等历史封装；当前后端并没有实现这些接口，现网主链路只包括登录、注册、退出和个人信息更新
 
-上传模型仍按数据库档案管理：
+## 代码里的几个真实细节
 
-- `.rknn` 检测模型
-- 对应 `.txt` 类名文件
+- `SensorService` 在 `8088` 传感器服务不可用时，会退回到模拟数据
+- `/api/rknn/forbidden-area` 当前存储在后端内存中，Spring Boot 重启后会清空
+- `/api/rknn/status` 会把视觉服务返回里的 `localhost/127.0.0.1` RTSP 地址改写成当前请求主机，便于前端直接播放
+- 录像真正落盘在视觉服务目录，Spring Boot 只负责代理状态、列表和下载
 
-后端切换模型时，会把实际的 `model=...` 和 `labels=...` 路径下发给视觉服务。
+## 模块 README
 
-## 流媒体与 IP 说明
-
-### WebRTC/WHEP 默认行为
-
-前端现在默认按“当前访问页面的主机地址”生成 WHEP 地址。
-
-例如你访问：
-
-- `http://10.137.128.69:3000`
-
-前端会优先尝试：
-
-- `http://10.137.128.69:8889/cam0/whep`
-- `http://10.137.128.69:8889/cam1/whep`
-
-这意味着：
-
-- 同一局域网内更换设备 IP 后，通常不需要再手改前端地址
-- 只有当 WebRTC 服务明确部署在另一台机器时，才建议配置 `VITE_WEBRTC_BASE_URL`
-
-### RTSP / WebRTC 地址
-
-- RTSP:
-  - `rtsp://<当前机器IP>:8554/cam0`
-  - `rtsp://<当前机器IP>:8554/cam1`
-  - `rtsp://<当前机器IP>:8554/cam2`
-- WebRTC(WHEP):
-  - `http://<当前机器IP>:8889/cam0/whep`
-  - `http://<当前机器IP>:8889/cam1/whep`
-
-## 实时监控页说明
-
-`/monitor` 页面现在默认会补齐三路视觉流：
-
-- `摄像头1 (cam0)`
-- `摄像头2 (cam1)`
-- `融合画面 (cam2)`
-
-页面行为补充：
-
-- “检测状态”按钮现在不再依赖旧 WebSocket 检测链，而是读取 `/api/rknn/status` 来同步视觉服务真实状态
-- “融合画面 (cam2)” 会显示在监控设备列表与视频宫格里
-- 录像操作仍只支持 `cam0 / cam1`，如果当前选中 `cam2`，详情里会显示“录像状态：不支持”
-
-## 常见问题
-
-### 1. 摄像头 busy / 端口 8091 绑定失败
-
-通常是旧的视觉服务没退出干净。
-
-```bash
-printf 'orangepi\n' | sudo -S pkill -x rknn_http_ctrl || true
-printf 'orangepi\n' | sudo -S pkill -x mediamtx || true
-printf 'orangepi\n' | sudo -S fuser -v /dev/video0 /dev/video2 || true
-ss -ltnp | grep -E '8091|8554|8889' || true
-```
-
-### 2. Dashboard 禁入区取帧返回 503
-
-接口：
-
-- `/api/rknn/frame/current?cameraId=1&track=0`
-
-这个接口在视觉服务刚启动、还未产生可用帧，或者摄像头/推理尚未就绪时，可能短暂返回 `503`。通常等服务稳定后重试即可。
-
-### 3. WebRTC 仍然连旧 IP
-
-优先检查：
-
-- `web-vue/.env.local`
-
-如果里面写了固定的：
-
-- `VITE_WEBRTC_BASE_URL=http://旧IP:8889`
-
-前端就会强制走这个旧地址。当前建议默认不写这一项。
-
-### 4. 录像文件列表返回 404
-
-如果前端“录像文件”弹窗请求：
-
-- `/api/rknn/record/files`
-- `/api/rknn/record/file`
-
-返回 `404`，通常是 Spring Boot 仍在运行旧进程，尚未加载新增录像路由。重启后端即可：
-
-```bash
-pkill -f 'com.example.demo.DemoApplication' || true
-pkill -f 'gradle.*bootRun' || true
-
-cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
-./gradlew bootRun
-```
-
-### 5. 删除检测记录返回 405
-
-当前后端已支持：
-
-- `DELETE /api/detection/record/{id}`
-- `DELETE /api/detection/record/batch`
-- `DELETE /api/detection/record/clear-all`
-
-如果页面仍然提示 `405 Method Not Allowed`，同样优先检查后端是否还是旧进程。
-
-## 默认账户
-
-- 管理员：
-  - 用户名：`admin`
-  - 密码：`Lml123`
-
-## 更多说明
-
-- 前端联调说明：[/home/orangepi/Desktop/web/bishebeifen-master/web-vue/README](/home/orangepi/Desktop/web/bishebeifen-master/web-vue/README)
-- 后端启动说明：[/home/orangepi/Desktop/web/bishebeifen-master/web-springboot/readme](/home/orangepi/Desktop/web/bishebeifen-master/web-springboot/readme)
-- 视觉服务运行说明：[/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/运行说明.md](/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/运行说明.md)
+- `web-vue/README`
+- `web-springboot/readme`
+- `web-springboot/demo3/demo/README.md`
+- `Hardware/README.md`
+- `Sound_Monitoring/README.md`
+- `yolov8-rk3588-cpp-3-15/README.md`

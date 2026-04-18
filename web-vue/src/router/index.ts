@@ -121,7 +121,7 @@ router.beforeEach((to, from, next) => {
   const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
 
   // 设置页面标题
-  document.title = `${to.meta.title} - 嵌入式多目标追踪与智能预警系统`
+  document.title = `${to.meta.title} - 追踪与智能预警系统`
 
   if (requiresAuth) {
     if (!userStore.isLoggedIn()) {

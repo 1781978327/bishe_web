@@ -2,9 +2,15 @@ import axios from 'axios'
 import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios'
 import { ElMessage } from 'element-plus'
 
+const fileBaseUrl =
+  import.meta.env.VITE_FILE_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  '/api'
+
 // 创建 axios 实例
 const service: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_FILE_URL,
+  baseURL: fileBaseUrl,
   timeout: 60000,
 })
 
@@ -136,7 +142,7 @@ const fileRequest = {
    * @returns 返回文件访问URL
    */
   getFileUrl(bucket: string, objectKey: string): string {
-    return `${import.meta.env.VITE_FILE_URL}/file/${bucket}/${objectKey}`
+    return `${fileBaseUrl}/file/${bucket}/${objectKey}`
   }
 }
 

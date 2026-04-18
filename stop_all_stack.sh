@@ -102,7 +102,10 @@ pkill -f 'sh -c vite --host 0.0.0.0' 2>/dev/null || true
 pkill -f 'gradle.*bootRun' 2>/dev/null || true
 pkill -f 'com.example.demo.DemoApplication' 2>/dev/null || true
 sudo -n pkill -f '/Hardware.*/sensor_reader_http' 2>/dev/null || true
+sudo -n pkill -f '(^|[[:space:]/])sensor_reader_http([[:space:]]|$)' 2>/dev/null || true
 sudo -n pkill -f '/Sound_Monitoring/build.*/rknn_yamnet_demo_http 8089' 2>/dev/null || true
+sudo -n pkill -f '/Sound_Monitoring/src/build.*/rknn_yamnet_demo_http 8089' 2>/dev/null || true
+sudo -n pkill -f '(^|[[:space:]/])rknn_yamnet_demo_http([[:space:]]|$)' 2>/dev/null || true
 sudo -n pkill -f '/yolov8-rk3588-cpp-3-15/build_release.*/rknn_http_ctrl' 2>/dev/null || true
 sudo -n pkill -f '/yolov8-rk3588-cpp-3-15/src/mediamtx' 2>/dev/null || true
 sudo -n pkill -f 'rknn_http_ctrl' 2>/dev/null || true

@@ -1,23 +1,33 @@
-# Gradle
-gradle-8.14.1/
-gradle-8.14.1-all.zip
-gradle-8.14.1-bin.zip
-gradle-8.14.1-wrapper.jar
-gradle/wrapper/gradle-wrapper.jar
-
-# Node modules
-*/node_modules/
-web-vue/node_modules/
-
-# Build outputs
-*/build/
-*/build_linux*/
-*/target/
+# Install/build outputs
+**/node_modules/
+**/.gradle/
+**/target/
 *.class
 *.jar
 *.war
 
-# IDE
+# Repo-specific build directories
+Sound_Monitoring/build/
+Sound_Monitoring/src/build/
+yolov8-rk3588-cpp-3-15/build/
+yolov8-rk3588-cpp-3-15/build_release/
+yolov8-rk3588-cpp-3-15/build_new/
+yolov8-rk3588-cpp-3-15/build_test/
+
+# Local runtime/output folders
+.runtime/
+**/uploads/
+**/upload/
+
+# Common generated executables in this repo
+Hardware/sensor_reader
+Hardware/sensor_reader_http
+Hardware/sensor_reader_fixed
+Hardware/dht11/dht11
+Hardware/ads1115/ads1115_read
+Hardware/ads1115/mq-2/mq2_read
+
+# IDE/editor files
 .idea/
 *.iml
 .vscode/
@@ -25,87 +35,17 @@ web-vue/node_modules/
 *.swo
 .DS_Store
 
-# Logs
+# Logs/temp
 *.log
 npm-debug.log*
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Uploads
-*/uploads/
-*/upload/
-
-# Temporary files
 *.tmp
 *.bak
 *.orig
 
-# Binary files - Models
-*.rknn
-*.pt
-*.onnx
-*.h5
-*.pb
-*.pbtxt
+# Local env files
+.env
+.env.local
+.env.*.local
 
-# Binary files - Libraries
-*.so
-*.so.*
-*.a
-*.dylib
-
-# Binary files - Executables
-*.exe
-*.dll
-*.app
-*.ipa
-
-# Binary files - Archives
-*.zip
-*.tar
-*.tar.gz
-*.tgz
-*.xz
-*.rar
-
-# OpenCV
-opencv/
-3rdparty/
-
-# Media files
-*.mp4
-*.avi
-*.mov
-*.mkv
-*.flv
-*.wmv
-*.wav
-
-# Images
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.bmp
-*.svg
-*.ico
-
-# TypeScript build cache
+# TypeScript cache
 *.tsbuildinfo
-
-# Allow publishing the RK3588 runtime assets that stay under GitHub's 100MB file limit.
-!yolov8-rk3588-cpp-3-15/model/
-!yolov8-rk3588-cpp-3-15/model/**
-!yolov8-rk3588-cpp-3-15/include/librknn_api.so
-!yolov8-rk3588-cpp-3-15/include/librknnrt.so
-!yolov8-rk3588-cpp-3-15/include/3rdparty/
-!yolov8-rk3588-cpp-3-15/include/3rdparty/**
-!yolov8-rk3588-cpp-3-15/src/mediamtx
-!yolov8-rk3588-cpp-3-15/video/
-!yolov8-rk3588-cpp-3-15/video/**
-
-# GitHub rejects files larger than 100MB, so keep this demo video out of the release branch.
-yolov8-rk3588-cpp-3-15/video/person.mp4

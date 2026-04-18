@@ -9,8 +9,16 @@ LOG_DIR="$RUNTIME_DIR/logs"
 FRONTEND_DIR="$ROOT_DIR/web-vue"
 BACKEND_DIR="$ROOT_DIR/web-springboot/demo3/demo"
 SENSOR_DIR="$ROOT_DIR/Hardware"
-SOUND_DIR="$ROOT_DIR/Sound_Monitoring/build"
+SOUND_DIR="${SOUND_DIR:-$ROOT_DIR/Sound_Monitoring/src/build}"
+if [[ ! -d "$SOUND_DIR" ]]; then
+  LEGACY_SOUND_DIR="$ROOT_DIR/Sound_Monitoring/build"
+  if [[ -d "$LEGACY_SOUND_DIR" ]]; then
+    SOUND_DIR="$LEGACY_SOUND_DIR"
+  fi
+fi
 VISION_DIR="$ROOT_DIR/yolov8-rk3588-cpp-3-15/build_release"
+VISION_MEDIAMTX_TEMPLATE="$ROOT_DIR/yolov8-rk3588-cpp-3-15/mediamtx.yml"
+VISION_MEDIAMTX_CONFIG="$VISION_DIR/mediamtx.yml"
 SUDO_PASSWORD="orangepi"
 DEFAULT_CAM0_SOURCE="/dev/v4l/by-path/platform-fc800000.usb-usb-0:1:1.0-video-index0"
 DEFAULT_CAM1_SOURCE="/dev/v4l/by-path/platform-fc880000.usb-usb-0:1:1.0-video-index0"
@@ -43,11 +51,13 @@ require_file "$BACKEND_DIR/gradlew"
 require_file "$SENSOR_DIR/sensor_reader_http"
 require_file "$SOUND_DIR/rknn_yamnet_demo_http"
 require_file "$VISION_DIR/rknn_http_ctrl"
+require_file "$VISION_MEDIAMTX_TEMPLATE"
 
 require_cmd bash
 require_cmd nohup
 require_cmd npm
 require_cmd sudo
+require_cmd curl
 
 if (( DRY_RUN == 0 )) && [[ "${EUID}" -ne 0 ]]; then
   echo "正在自动输入 sudo 密码，用于启动三个硬件/算法服务..."
@@ -152,6 +162,18 @@ cleanup_vision_residuals() {
   sleep 1
 }
 
+cleanup_sensor_residuals() {
+  echo "[sensor_http] 清理残留的传感器服务进程..."
+  sudo -n pkill -f 'sensor_reader_http' 2>/dev/null || true
+  sleep 1
+}
+
+cleanup_sound_residuals() {
+  echo "[sound_http] 清理残留的声音服务进程..."
+  sudo -n pkill -f 'rknn_yamnet_demo_http' 2>/dev/null || true
+  sleep 1
+}
+
 resolve_camera_source() {
   local env_value="$1"
   local preferred_path="$2"
@@ -201,6 +223,12 @@ discover_secondary_camera_source() {
   fi
 
   printf '%s' "/dev/video2"
+}
+
+ensure_vision_mediamtx_config() {
+  mkdir -p "$VISION_DIR"
+  cp "$VISION_MEDIAMTX_TEMPLATE" "$VISION_MEDIAMTX_CONFIG"
+  echo "[vision_http] 已同步 mediamtx 配置: $VISION_MEDIAMTX_CONFIG"
 }
 
 start_service() {
@@ -256,10 +284,66 @@ start_service() {
   echo "[$name] 已启动，PID=$pid"
 }
 
+fail_service_start() {
+  local name="$1"
+  local message="$2"
+  local logfile="${SERVICE_LOG[$name]:-}"
+  echo "[$name] 启动失败：$message" >&2
+  if [[ -n "$logfile" ]]; then
+    echo "[$name] 日志：$logfile" >&2
+    tail -n 40 "$logfile" 2>/dev/null || true
+  fi
+  exit 1
+}
+
+wait_for_http_ready() {
+  local name="$1"
+  local url="$2"
+  local expected_text="${3:-}"
+  local status_regex="${4:-^200$}"
+  local tries="${5:-40}"
+
+  if (( DRY_RUN )); then
+    return 0
+  fi
+
+  local response=""
+  local code=""
+  local body=""
+  for ((i=0; i<tries; i++)); do
+    response="$(curl -sS --max-time 2 -w $'\n%{http_code}' "$url" 2>/dev/null || true)"
+    code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if [[ "$code" =~ $status_regex ]]; then
+      if [[ -z "$expected_text" || "$body" == *"$expected_text"* ]]; then
+        SERVICE_STATE["$name"]="ready"
+        return 0
+      fi
+    fi
+    sleep 0.5
+  done
+
+  fail_service_start "$name" "健康检查未通过: $url"
+}
+
+stop_service_if_running "frontend" "user"
+stop_service_if_running "backend" "user"
+stop_service_if_running "sensor_http" "sudo"
+stop_service_if_running "sound_http" "sudo"
+stop_service_if_running "vision_http" "sudo"
+
+cleanup_sensor_residuals
+cleanup_sound_residuals
+cleanup_vision_residuals
+
 start_service "frontend" "user" "$FRONTEND_DIR" "npm run dev -- --host 0.0.0.0"
+wait_for_http_ready "frontend" "http://127.0.0.1:3000" "" '^200$' 40
 start_service "backend" "user" "$BACKEND_DIR" "./gradlew bootRun"
+wait_for_http_ready "backend" "http://127.0.0.1:8080/api/status" "" '^(200|401|403)$' 80
 start_service "sensor_http" "sudo" "$SENSOR_DIR" "./sensor_reader_http"
+wait_for_http_ready "sensor_http" "http://127.0.0.1:8088/health" '"status": "ok"' '^200$' 40
 start_service "sound_http" "sudo" "$SOUND_DIR" "env LD_LIBRARY_PATH=./lib:\$LD_LIBRARY_PATH RT_PRINT_WINDOW=1 ./rknn_yamnet_demo_http 8089"
+wait_for_http_ready "sound_http" "http://127.0.0.1:8089/health" '"status": "ok"' '^200$' 40
 
 CAM0_SOURCE="$(resolve_camera_source "${CAM0_SOURCE:-}" "$DEFAULT_CAM0_SOURCE" "/dev/video0" "/dev/video0")"
 if [[ -n "${CAM1_SOURCE:-}" ]]; then
@@ -272,9 +356,9 @@ echo "视觉服务摄像头源："
 echo "  cam0 -> $CAM0_SOURCE"
 echo "  cam1 -> $CAM1_SOURCE"
 
-stop_service_if_running "vision_http" "sudo"
-cleanup_vision_residuals
+ensure_vision_mediamtx_config
 start_service "vision_http" "sudo" "$VISION_DIR" "./rknn_http_ctrl --cam0-source $CAM0_SOURCE --cam1-source $CAM1_SOURCE"
+wait_for_http_ready "vision_http" "http://127.0.0.1:8091/api/status" '"running"' '^200$' 40
 
 echo
 echo "================ PID Summary ================"

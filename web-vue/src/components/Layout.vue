@@ -2,10 +2,10 @@
 <template>
   <el-container class="layout-container">
     <!-- 侧边栏 -->
-    <el-aside :width="isCollapse ? '64px' : '200px'" class="aside">
+      <el-aside :width="isCollapse ? '64px' : '200px'" class="aside">
       <div class="logo" :class="{ 'logo-collapse': isCollapse }">
-        <img src="@/assets/images/logo.png" alt="logo" />
-        <span v-show="!isCollapse">嵌入式多目标追踪与智能预警系统</span>
+        <el-icon class="logo-mark"><Monitor /></el-icon>
+        <span v-show="!isCollapse" class="logo-text">追踪与智能预警系统</span>
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -160,14 +160,13 @@ const handleCommand = (command: string) => {
 }
 
 .logo {
-  height: 64px;
+  min-height: 64px;
   display: flex;
   align-items: center;
-  padding: 0 20px;
+  padding: 0 14px;
   color: #fff;
   transition: all 0.3s;
   overflow: hidden;
-  white-space: nowrap;
   background: rgba(255, 255, 255, 0.1);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   font-weight: 600;
@@ -176,13 +175,34 @@ const handleCommand = (command: string) => {
 
 .logo-collapse {
   padding: 0 16px;
+  min-height: 64px;
 }
 
-.logo img {
+.logo-mark {
   width: 32px;
   height: 32px;
-  margin-right: 12px;
+  margin-right: 8px;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.18);
+  color: #fbbf24;
+  font-size: 18px;
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.22);
+}
+
+.logo-text {
+  min-width: 0;
+  flex: 1;
+  display: block;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .menu {

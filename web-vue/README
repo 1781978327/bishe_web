@@ -1,217 +1,194 @@
-# 前后端+视觉服务联调说明
+# web-vue 前端说明
 
-## 端口约定
+当前前端基于 `Vue 3 + TypeScript + Vite + Element Plus`，主职责是：
 
-- 前端 `web-vue`: `3000`
-- Spring Boot 后端: `8080`
-- RKNN 视觉服务: `8091`
-- MediaMTX RTSP: `8554`
-- MediaMTX HLS: `8888`
-- MediaMTX WebRTC(WHEP): `8889`
+- 登录与基础页面路由
+- 环境监测展示
+- 监控页播放视觉流并控制推理/录像
+- 检测记录查询与处理
+- 模型上传与切换
 
-## 1. 启动前端
+前端默认把 Spring Boot 作为主 API 入口，基地址优先取：
+
+- `VITE_API_BASE_URL`
+- `VITE_API_URL`
+- 默认值 `/api`
+
+## 启动
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-vue
+npm install
 npm run dev -- --host 0.0.0.0 --port 3000
 ```
 
-前端访问:
-
-- 本机: `http://127.0.0.1:3000`
-- 局域网: `http://<你的IP>:3000`
-
-## 2. 启动后端（Spring Boot）
+构建：
 
 ```bash
-cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
-./gradlew bootRun
+npm run build
 ```
 
-后端基地址:
+## Vite 代理
 
-- `http://127.0.0.1:8080/api`
+`vite.config.ts` 当前代理如下：
 
-## 3. 启动视觉服务（RKNN）
+| 前缀 | 转发目标 | 说明 |
+|---|---|---|
+| `/api` | `http://localhost:8080` | 当前主后端 |
+| `/algo` | `http://localhost:5000` | 历史算法代理，现主链路未使用 |
+| `/file` | `http://localhost:5001` | 历史文件代理，现主链路通常直接走 `/api/file` |
 
-```bash
-cd /home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_release
-sudo ./rknn_http_ctrl --cam0-source /dev/video0 --cam1-source /dev/video2
-```
+## 当前有效路由
 
-视觉服务地址:
+| 路由 | 页面 | 说明 |
+|---|---|---|
+| `/login` | 登录页 | 无需登录 |
+| `/register` | 注册页 | 无需登录 |
+| `/dashboard` | 首页 | 环境监测、声音监测、视觉统计 |
+| `/profile` | 个人中心 | 头像上传、个人资料修改 |
+| `/monitor` | 监控管理 | 摄像头列表、推理开关、录像、模型切换 |
+| `/detection/record` | 检测记录管理 | 查询、处理、删除安全记录 |
+| `/model/upload` | 上传模型 | 上传 `.rknn + .txt` 并切换模型 |
+| `/admin` | 管理控制台 | 管理员首页 |
+| `/admin/users` | 用户管理 | 依赖遗留用户管理接口，当前后端未完全实现 |
 
-- `http://127.0.0.1:8091`
+补充：
 
-说明：
+- 当前 `/camera` 路由会直接重定向到 `/dashboard`
+- `SoundMonitoring.vue`、`camera/index.vue`、`user/index.vue` 组件仍在仓库里，但不属于当前主路由链路
 
-- 推荐从 `build_release` 目录启动，确保自动拉起的 `mediamtx` 能正确读取 `build_release/mediamtx.yml`
-- 如果摄像头号不同，请先用 `v4l2-ctl --list-devices` 确认设备号
+## 环境变量
 
-## 4. 快速联通自检
+| 变量 | 默认值 | 用途 |
+|---|---|---|
+| `VITE_API_BASE_URL` | `/api` | 主后端地址 |
+| `VITE_API_URL` | `/api` | 主后端地址备用 |
+| `VITE_FILE_URL` | 跟随主后端 | 文件接口地址，可单独覆盖 |
+| `VITE_STREAM_PROTOCOL` | `webrtc` | 流播放协议，支持 `webrtc` 或 `hls` |
+| `VITE_WEBRTC_BASE_URL` | `http://<当前页面主机>:8889` | WHEP 基地址，通常无需手写 |
+| `VITE_STREAM_HOST` | 空 | 强制覆盖流媒体主机 |
+| `VITE_ALGO_URL` | 空 | `AlgoHealthCheck` 组件的独立算法地址 |
+| `VITE_ALGO_WS_URL` | 空 | 旧 WebSocket 检测链路，未配置时自动禁用 |
 
-```bash
-# 视觉服务状态
-curl http://127.0.0.1:8091/api/status
+## 播放链路
 
-# 后端禁入区查询（cameraId=1/2）
-curl "http://127.0.0.1:8080/api/rknn/forbidden-area?cameraId=1"
-curl "http://127.0.0.1:8080/api/rknn/forbidden-area?cameraId=2"
-```
+`src/components/VideoPlayer/index.vue` 当前逻辑：
 
-## 5. 摄像头取帧映射（已修复串帧）
+- 默认协议是 `webrtc`
+- 若 `VITE_STREAM_PROTOCOL=hls`，则改为 HLS
+- 前端会把后端返回的 `rtsp://<host>:8554/camX` 自动转换成
+  - HLS：`http://<host>:8888/camX/index.m3u8`
+  - WHEP：`http://<host>:8889/camX/whep`
 
-- `cameraId=1` 对应视觉 `cam=0`
-- `cameraId=2` 对应视觉 `cam=1`
+正常情况下不需要再手写 `VITE_WEBRTC_BASE_URL`。只有 WebRTC 部署在另一台机器时，才建议单独指定。
 
-视觉服务支持按路取帧:
+## 请求封装
 
-- `/api/frame?cam=0&track=0`
-- `/api/frame?cam=1&track=0`
+### `src/api/request.ts`
 
-后端 `/api/rknn/frame/current` 已改为直接按 `cam` 获取，不再通过“先切摄像头再抓帧”方式。
+- 主后端请求封装
+- 自动从 `localStorage.userInfo.token` 读取 JWT
+- 默认把统一响应体里的 `data` 解包后返回
 
-## 6. 推理开关
+### `src/api/file_request.ts`
 
-```bash
-# 开推理（不启用跟踪）
-curl -X POST "http://127.0.0.1:8091/api/inference/on?track=0"
+- 文件上传/读取/删除封装
+- 仍然从 `localStorage.userInfo.token` 附带认证头
+- 当前常用 bucket
+  - `avatars`
+  - `models`
+  - `detection`
+  - `process`
 
-# 关推理
-curl -X POST "http://127.0.0.1:8091/api/inference/off"
-```
+## 页面与 HTTP 对照
 
-## 7. 禁入区更新提示
+### 首页 `/dashboard`
 
-- 前端提交禁入区后，视觉服务会周期同步（默认约 2 秒一次）。
-- 通常 1-2 秒后画面中的四边形会更新。
+主要调用：
 
-## 8. 实时监控录像
+- `GET /api/sensor/latest`
+- `GET /api/sensor/threshold`
+- `PUT /api/sensor/threshold`
+- `PUT /api/sensor/monitoring?enabled=true|false`
+- `POST /api/sensor/refresh`
+- `GET /api/sensor/monitoring`
+- `POST /api/sound/start`
+- `POST /api/sound/stop`
+- `GET /api/sound/status`
+- `POST /api/sound/upload`
+- `GET /api/rknn/detection/count?cam=0|1`
 
-监控页现在已经支持：
+### 监控页 `/monitor`
 
-- 选择录像摄像头（`cam0 / cam1`）
-- 开始录像 / 停止录像
-- 查看录像文件列表
-- 下载 `.mp4` 文件
+主要调用：
 
-前端调用的后端接口为：
-
+- `GET /api/camera`
+- `GET /api/detection/record/page`
+- `GET /api/model/list`
+- `POST /api/model/select?id=...`
+- `GET /api/rknn/status`
+- `POST /api/rknn/inference/on`
+- `POST /api/rknn/inference/off`
+- `POST /api/rknn/threshold/set`
+- `POST /api/rknn/tracker/set?enabled=true|false`
+- `POST /api/rknn/rtsp/camera/start`
 - `GET /api/rknn/record/status`
 - `POST /api/rknn/record/start?cameraId=1|2`
 - `POST /api/rknn/record/stop?cameraId=1|2`
-- `GET /api/rknn/record/files?cameraId=1|2`
+- `GET /api/rknn/record/files`
 - `GET /api/rknn/record/file?name=...`
 
-说明：
+### 检测记录页 `/detection/record`
 
-- `cameraId=1` 对应视觉服务 `cam0`
-- `cameraId=2` 对应视觉服务 `cam1`
-- 如果“录像文件”弹窗返回 `404`，通常是后端还没重启到新版本
+主要调用：
 
-## 9. 融合画面（cam2）
+- `GET /api/detection/record/page`
+- `GET /api/detection/record/{id}`
+- `PUT /api/detection/record/process`
+- `PUT /api/detection/record/{id}/process`
+- `DELETE /api/detection/record/{id}`
+- `DELETE /api/detection/record/batch`
+- `DELETE /api/detection/record/clear-all`
+- `GET /api/camera`
+- `GET /api/sound/audio?path=...`
 
-实时监控页现在默认会同时补齐三路视觉流：
+### 个人中心 `/profile`
 
-- `摄像头1 (cam0)`
-- `摄像头2 (cam1)`
-- `融合画面 (cam2)`
+主要调用：
 
-其中：
+- `PUT /api/user`
+- `POST /api/file/upload/avatars`
+- `GET /api/file/avatars/...`
 
-- `cam2` 是由视觉服务把 `cam0 + cam1` 左右拼接后推出的融合画面
-- 默认地址是 `rtsp://<当前页面主机>:8554/cam2`
-- 该路主要用于展示，不参与当前录像控制
+### 上传模型 `/model/upload`
 
-如果你在监控页点击“检测状态”，当前前端会：
+主要调用：
 
-- 先尝试确保视觉服务 RTSP 已启动
-- 然后请求 `/api/rknn/status`
-- 再按视觉服务真实状态刷新 `cam0 / cam1 / cam2`
+- `POST /api/file/upload/models`
+- `GET /api/model/list`
+- `GET /api/model/current`
+- `POST /api/model/select?id=...`
 
-也就是说，这个按钮已经不再依赖旧的 WebSocket `check_camera` 机制。
+## 当前代码里的遗留点
 
-## 10. 监控页刷新与显示规则
+- `src/api/user.ts` 仍有 `/user/page`、`/user/{id}`、`/user/password`、`/user/{id}/reset-password` 等封装
+- 当前 Spring Boot 实际只实现了
+  - `POST /user/login`
+  - `POST /user/register`
+  - `POST /user/logout`
+  - `PUT /user`
+- 因此 `/admin/users` 页面如果继续使用这些遗留接口，联调前需要先补齐后端
 
-实时监控页现在采用“固定双路默认流 + 数据库设备列表补充”的策略：
-
-- 首次进入页面会默认补 `cam0`、`cam1`
-- 点击“刷新”后，会重新拉取后端摄像头列表
-- 同时仍会补齐默认视觉流，现在包括 `cam0 / cam1 / cam2`
-- 不会再出现“点一次刷新后只剩一个摄像头”的情况
-
-另外，“监控设备”列表中的默认双路占位设备，如果位置只是示例文案，列表会优先展示 RTSP 地址；如果后端把 `camera.name` 直接填成了 `rtsp://...`，前端会自动回退成可读名称，例如 `摄像头1 (cam0)`。
-
-## 11. 切换到 WebRTC 低延迟播放
-
-前端默认走 HLS。要切到 WebRTC，可在 `web-vue/.env.local` 或 `.env.development` 中设置：
-
-```bash
-VITE_STREAM_PROTOCOL=webrtc
-```
-
-正常情况下不需要再写 `VITE_WEBRTC_BASE_URL`。当前前端会自动使用“你访问页面时的主机地址”来生成：
-
-- `http://<当前页面主机>:8889/cam0/whep`
-- `http://<当前页面主机>:8889/cam1/whep`
-
-只有在 WebRTC 服务明确部署在另一台机器时，才建议额外设置：
+## 推荐联调
 
 ```bash
-VITE_WEBRTC_BASE_URL=http://<单独的流媒体主机>:8889
+curl http://127.0.0.1:8080/api/test/health
+curl http://127.0.0.1:8080/api/rknn/status
+curl http://127.0.0.1:8080/api/sensor/latest
 ```
 
-修改环境变量后，重启前端：
+如果监控页播放异常，优先检查：
 
-```bash
-npm run dev -- --host 0.0.0.0 --port 3000
-```
-
-说明：
-
-- `VITE_STREAM_PROTOCOL=webrtc` 时，监控页会使用 `http://<host>:8889/<path>/whep` 建连。
-- 不设置该变量或设为 `hls` 时，保持原 HLS 播放。
-- 如果修改过 `.env.local`，浏览器建议执行一次强制刷新：`Ctrl + Shift + R`
-
-## 12. 常见问题
-
-### 1. 实时监控仍然显示 RTSP 地址作为摄像头名称
-
-监控页现在会优先显示可读名称；如果浏览器仍然显示旧文案，执行一次强制刷新：`Ctrl + Shift + R`
-
-### 2. 实时监控仍然连旧 IP
-
-先检查：
-
-```bash
-cat /home/orangepi/Desktop/web/bishebeifen-master/web-vue/.env.local
-```
-
-如果存在旧的：
-
-```bash
-VITE_WEBRTC_BASE_URL=http://旧IP:8889
-```
-
-请删除或改成新的流媒体主机地址，然后重启前端。
-
-### 3. 摄像头 busy / 8091 端口占用
-
-通常是旧的视觉服务没退出干净：
-
-```bash
-printf 'orangepi\n' | sudo -S pkill -x rknn_http_ctrl || true
-printf 'orangepi\n' | sudo -S pkill -x mediamtx || true
-printf 'orangepi\n' | sudo -S fuser -v /dev/video0 /dev/video2 || true
-ss -ltnp | grep -E '8091|8554|8889' || true
-```
-
-### 4. Dashboard 获取禁入区当前帧返回 503
-
-接口：
-
-```bash
-curl -i "http://127.0.0.1:8080/api/rknn/frame/current?cameraId=1&track=0"
-```
-
-这个接口在视觉服务刚启动、摄像头还未就绪，或者当前没有可用帧时，可能短暂返回 `503`。服务稳定后通常会恢复为 `200 image/jpeg`。
+- `http://127.0.0.1:8080/api/rknn/status`
+- `http://127.0.0.1:8091/api/status`
+- `ss -ltnup | grep -E '8554|8888|8889'`

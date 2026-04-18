@@ -222,7 +222,7 @@ const hasDetectionAlert = computed(() => {
 })
 
 const algoWsEnabled = computed(() => !!import.meta.env.VITE_ALGO_WS_URL)
-const streamProtocol = (((import.meta.env.VITE_STREAM_PROTOCOL as string | undefined) || 'hls')).toLowerCase()
+const streamProtocol = (((import.meta.env.VITE_STREAM_PROTOCOL as string | undefined) || 'webrtc')).toLowerCase()
 const isWebRtcMode = computed(() => !algoWsEnabled.value && streamProtocol === 'webrtc')
 
 const getCurrentPageHost = (): string => {

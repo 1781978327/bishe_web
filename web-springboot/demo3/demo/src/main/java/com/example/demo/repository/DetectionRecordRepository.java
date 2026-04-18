@@ -41,8 +41,15 @@ public interface DetectionRecordRepository extends JpaRepository<DetectionRecord
            "ORDER BY d.detectionTime DESC")
     Page<DetectionRecord> findByVideoEvents(Pageable pageable);
 
-    // 按声音类事件查询 (sound_*)
-    @Query("SELECT d FROM DetectionRecord d WHERE d.aiDescription LIKE '%sound_%' ORDER BY d.detectionTime DESC")
+    // 按声音类事件查询
+    // 兼容旧格式 sound_*，以及当前中文描述“声音异常 - xxx”
+    @Query("SELECT d FROM DetectionRecord d WHERE " +
+           "(d.cameraName = '声音监测' OR " +
+           "d.aiDescription LIKE '%声音异常%' OR " +
+           "d.aiDescription LIKE '%sound_%' OR " +
+           "d.audioUrl IS NOT NULL OR " +
+           "d.soundKeywords IS NOT NULL) " +
+           "ORDER BY d.detectionTime DESC")
     Page<DetectionRecord> findBySoundEvents(Pageable pageable);
 
     // 按环境类事件查询 (env_*，不含 env_intrusion)

@@ -6,10 +6,10 @@
         <div class="brand-copy">
           <span class="brand-badge">RK3588 Edge Vision Console</span>
           <div class="brand-logo-wrap">
-            <img src="@/assets/images/logo.png" alt="系统Logo" class="brand-logo" />
+            <img src="@/assets/images/logo.svg" alt="系统Logo" class="brand-logo" />
             <div class="brand-logo-ring"></div>
           </div>
-          <h1 class="brand-title">嵌入式多目标追踪与智能预警系统</h1>
+          <h1 class="brand-title">追踪与智能预警系统</h1>
           <p class="brand-subtitle">
             面向边缘侧视觉监测场景的一体化控制台，聚合摄像头接入、实时推理、轨迹跟踪与告警联动。
           </p>
