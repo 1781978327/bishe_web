@@ -27,6 +27,7 @@ audio_capture_t* capture_open(const char *device, int sample_rate, int channels,
     cap->frames_per_buffer = sample_rate / 10;  // 100ms per read
     cap->total_frames = 0;
     cap->is_recording = 0;
+    cap->capture_gain = 1.0f;
 
     // 计算缓冲区大小：duration_sec + 1秒余量
     int buf_size = sample_rate * (duration_sec + 1);
@@ -149,11 +150,23 @@ int capture_read(audio_capture_t *cap, int frames, int timeout_ms)
     // 转换为 float 并归一化
     int read_frames = (int)ret;
     for (int i = 0; i < read_frames * cap->channels; i++) {
-        cap->data[cap->total_frames + i] = cap->raw_data[i] / 32768.0f;
+        float sample = cap->raw_data[i] / 32768.0f;
+        sample *= cap->capture_gain;
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < -1.0f) sample = -1.0f;
+        cap->data[cap->total_frames + i] = sample;
     }
 
     cap->total_frames += read_frames;
     return read_frames;
+}
+
+void capture_set_gain(audio_capture_t *cap, float gain)
+{
+    if (!cap) return;
+    if (gain < 0.0f) gain = 0.0f;
+    if (gain > 2.0f) gain = 2.0f;
+    cap->capture_gain = gain;
 }
 
 void capture_stop(audio_capture_t *cap)

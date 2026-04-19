@@ -20,6 +20,14 @@ fi
 VISION_DIR="$ROOT_DIR/yolov8-rk3588-cpp-3-15/build_release"
 VISION_MEDIAMTX_TEMPLATE="$ROOT_DIR/yolov8-rk3588-cpp-3-15/mediamtx.yml"
 VISION_MEDIAMTX_CONFIG="$VISION_DIR/mediamtx.yml"
+DEFAULT_SOX_DENOISE_PROFILE=""
+if [[ -f "$ROOT_DIR/speech_camera2_80.prof" ]]; then
+  DEFAULT_SOX_DENOISE_PROFILE="$ROOT_DIR/speech_camera2_80.prof"
+elif [[ -f "$ROOT_DIR/noise_camera2.prof" ]]; then
+  DEFAULT_SOX_DENOISE_PROFILE="$ROOT_DIR/noise_camera2.prof"
+elif [[ -f "$ROOT_DIR/noise.prof" ]]; then
+  DEFAULT_SOX_DENOISE_PROFILE="$ROOT_DIR/noise.prof"
+fi
 SUDO_PASSWORD="orangepi"
 DEFAULT_CAM0_SOURCE="/dev/v4l/by-path/platform-fc800000.usb-usb-0:1:1.0-video-index0"
 DEFAULT_CAM1_SOURCE="/dev/v4l/by-path/platform-fc880000.usb-usb-0:1:1.0-video-index0"
@@ -380,7 +388,14 @@ start_service "backend" "user" "$BACKEND_DIR" "./gradlew bootRun"
 wait_for_http_ready "backend" "http://127.0.0.1:8080/api/status" "" '^(200|401|403)$' 80
 start_service "sensor_http" "sudo" "$SENSOR_DIR" "./sensor_reader_http"
 wait_for_http_ready "sensor_http" "http://127.0.0.1:8088/health" '"status": "ok"' '^200$' 40
-start_service "sound_http" "sudo" "$SOUND_DIR" "env LD_LIBRARY_PATH=./lib:\$LD_LIBRARY_PATH RT_PRINT_WINDOW=1 ./rknn_yamnet_demo_http 8089"
+SOUND_HTTP_CMD="env LD_LIBRARY_PATH=./lib:\$LD_LIBRARY_PATH RT_PRINT_WINDOW=1"
+SOUND_HTTP_CMD="$SOUND_HTTP_CMD RT_AMIXER_ENABLED='${RT_AMIXER_ENABLED:-1}' RT_AMIXER_CARD='${RT_AMIXER_CARD:-1}' RT_AMIXER_CONTROL='${RT_AMIXER_CONTROL:-Mic}' RT_AMIXER_VOLUME='${RT_AMIXER_VOLUME:-80%}'"
+SOUND_HTTP_CMD="$SOUND_HTTP_CMD RT_CAPTURE_VOLUME='${RT_CAPTURE_VOLUME:-1.0}'"
+if [[ -n "${DEFAULT_SOX_DENOISE_PROFILE}" ]]; then
+  SOUND_HTTP_CMD="$SOUND_HTTP_CMD SOX_DENOISE_PROFILE='${SOX_DENOISE_PROFILE:-$DEFAULT_SOX_DENOISE_PROFILE}' SOX_DENOISE_AMOUNT='${SOX_DENOISE_AMOUNT:-0.25}'"
+fi
+SOUND_HTTP_CMD="$SOUND_HTTP_CMD ./rknn_yamnet_demo_http 8089"
+start_service "sound_http" "sudo" "$SOUND_DIR" "$SOUND_HTTP_CMD"
 wait_for_http_ready "sound_http" "http://127.0.0.1:8089/health" '"status": "ok"' '^200$' 40
 
 CAM0_SOURCE="$(resolve_camera_source "${CAM0_SOURCE:-}" "$DEFAULT_CAM0_SOURCE" "/dev/video0" "/dev/video0")"

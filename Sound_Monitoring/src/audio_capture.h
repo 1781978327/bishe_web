@@ -24,6 +24,7 @@ typedef struct {
     int16_t *raw_data;         // S16 临时缓冲区
     int raw_data_size;         // raw_data 缓冲区大小
     int is_recording;          // 正在采集标志
+    float capture_gain;        // 软件采集增益，1.0 = 100%
 } audio_capture_t;
 
 /**
@@ -54,6 +55,14 @@ int capture_start(audio_capture_t *cap);
  * @return        实际采集的帧数，-1 失败
  */
 int capture_read(audio_capture_t *cap, int frames, int timeout_ms);
+
+/**
+ * 设置采集增益
+ *
+ * @param cap 采集句柄
+ * @param gain 增益倍率，1.0 = 100%，0.8 = 80%
+ */
+void capture_set_gain(audio_capture_t *cap, float gain);
 
 /**
  * 停止采集

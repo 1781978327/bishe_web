@@ -68,6 +68,9 @@ sudo ./rknn_yamnet_demo_http 8089
 - 默认实时设备：`plughw:CARD=Camera_1,DEV=0`
 - 默认设备失败时会回退到：`plughw:CARD=Camera,DEV=0`
 - 如未关闭自动启动，会在服务启动后尝试自动开启实时监测
+- 如果检测到 `SOX_DENOISE_PROFILE`，会在进入模型前先使用 `sox noisered` 做降噪
+- 实时录音默认先执行 `amixer -c 1 sset Mic 80%`
+- 软件增益默认保持 `1.0`，避免和硬件音量叠加导致过度衰减
 
 ## 环境变量
 
@@ -77,14 +80,37 @@ export RT_PRINT_ASR=0
 export VOSK_MODEL_CN=/path/to/vosk-model-small-cn-0.22
 export VOSK_MODEL_EN=/path/to/vosk-model-small-en-us-0.15
 export VOSK_LIB_PATH=/path/to/libvosk.so
+export RT_AMIXER_ENABLED=1
+export RT_AMIXER_CARD=1
+export RT_AMIXER_CONTROL=Mic
+export RT_AMIXER_VOLUME=80%
+export RT_CAPTURE_VOLUME=1.0
+export SOX_DENOISE_ENABLED=1
+export SOX_DENOISE_PROFILE=/home/orangepi/Desktop/web/bishebeifen-master/speech_camera2_80.prof
+export SOX_DENOISE_AMOUNT=0.25
+export SOX_BIN=sox
 ```
 
 说明：
 
 - `AUTO_START_REALTIME=0`：禁止启动时自动开启实时监测
 - `RT_PRINT_ASR=0`：关闭实时模式的周期性转写日志
+- `RT_AMIXER_ENABLED=1`：启动实时监测前执行硬件麦克风音量设置
+- `RT_AMIXER_CARD=1`、`RT_AMIXER_CONTROL=Mic`、`RT_AMIXER_VOLUME=80%`：对应 `amixer -c 1 sset Mic 80%`
+- `RT_CAPTURE_VOLUME=1.0`：软件增益，默认不额外放大或缩小
 - `VOSK_MODEL_CN`、`VOSK_MODEL_EN`：显式指定中文/英文模型目录
 - `VOSK_LIB_PATH`：显式指定 `libvosk.so`
+- `SOX_DENOISE_ENABLED=0|1`：显式关闭或开启 SoX 降噪
+- `SOX_DENOISE_PROFILE`：噪声 profile 文件路径
+- `SOX_DENOISE_AMOUNT`：`noisered` 强度，当前默认 `0.25`
+- `SOX_BIN`：`sox` 可执行文件路径
+
+当前代码行为：
+
+- `POST /analyze`、`POST /analyze/upload` 在进入模型前会先做一次 SoX 降噪
+- `POST /realtime/start` 启动的实时监测，在每个 3 秒检测窗口进入模型前也会先做 SoX 降噪
+- 保存到 `./alarm_audio/` 和 `./anomaly_audio/` 的异常音频，也会在落盘后做一次 SoX 降噪
+- 如果没找到 profile 或没装 `sox`，会自动跳过，不影响服务启动
 
 ## 运行时文件
 
@@ -100,6 +126,10 @@ export VOSK_LIB_PATH=/path/to/libvosk.so
   - 上传接口原始临时文件
 - `/tmp/yamnet_convert_*.wav`
   - 转码后临时 WAV
+- `/tmp/yamnet_sox_in_*.wav`
+  - SoX 降噪临时输入 WAV
+- `/tmp/yamnet_sox_out_*.wav`
+  - SoX 降噪临时输出 WAV
 
 ## HTTP API
 
@@ -259,7 +289,16 @@ curl "http://127.0.0.1:8089/realtime/transcript?seconds=30&save_audio=1"
   "keywords_count": 521,
   "asr_enabled": true,
   "asr_model_cn": "...",
-  "asr_model_en": "..."
+  "asr_model_en": "...",
+  "sox_denoise_enabled": true,
+  "sox_bin": "sox",
+  "sox_denoise_profile": "/home/orangepi/Desktop/web/bishebeifen-master/speech_camera2_80.prof",
+  "sox_denoise_amount": 0.25,
+  "rt_capture_volume": 1.00,
+  "rt_amixer_enabled": true,
+  "rt_amixer_card": "1",
+  "rt_amixer_control": "Mic",
+  "rt_amixer_volume": "80%"
 }
 ```
 
@@ -297,6 +336,25 @@ curl http://127.0.0.1:8089/health
 curl http://127.0.0.1:8089/config
 curl http://127.0.0.1:8089/realtime/status
 curl http://127.0.0.1:8089/realtime/windows?limit=5
+```
+
+如果你是通过根目录脚本启动：
+
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master
+./start_all_stack.sh
+```
+
+当前脚本会优先把下面这个 profile 传给声音服务：
+
+```text
+/home/orangepi/Desktop/web/bishebeifen-master/speech_camera2_80.prof
+```
+
+如果这个文件不存在，则会回退尝试：
+
+```text
+/home/orangepi/Desktop/web/bishebeifen-master/noise.prof
 ```
 
 上传测试：

@@ -72,6 +72,7 @@
 #include <vector>
 #include <algorithm>
 #include <sstream>
+#include <string>
 
 #include "yamnet.h"
 #include "audio_utils.h"
@@ -129,6 +130,17 @@ static ServerConfig config = {
     .anomaly_threshold = 0.1f,
     .save_anomaly = 0
 };
+
+// ========== SoX 降噪配置 ==========
+static int g_sox_denoise_enabled = 0;
+static float g_sox_denoise_amount = 0.25f;
+static char g_sox_bin[256] = "sox";
+static char g_sox_denoise_profile[512] = {0};
+static float g_rt_capture_volume = 1.0f;
+static int g_rt_amixer_enabled = 1;
+static char g_rt_amixer_card[32] = "1";
+static char g_rt_amixer_control[64] = "Mic";
+static char g_rt_amixer_volume[32] = "80%";
 
 // ========== 实时监测状态 ==========
 #define RT_RING_BUFFER_SEC 120
@@ -229,6 +241,14 @@ static void json_escape_string(const char* input, char* output, size_t output_si
 static AsrResult run_asr_locked(const float *data, int num_frames);
 static int should_log_http_request(const char *method, const char *path);
 static std::string summarize_top_results(const ResultEntry *results, int result_count, int max_items);
+static void apply_rt_capture_mixer();
+static int sox_denoise_is_ready();
+static int sox_denoise_wav_inplace(const char *wav_path, const char *context);
+static int sox_denoise_buffer_inplace(float *data,
+                                      int num_frames,
+                                      int sample_rate,
+                                      int num_channels,
+                                      const char *context);
 
 // ========== Spring Boot 上报函数 ==========
 static int report_to_spring_boot(const char *audio_path, float duration,
@@ -426,6 +446,7 @@ static void rt_push_event(float start_sec, float end_sec, float max_score) {
                           g_event_audio.frames, rt_sample_rate, 1);
         duration = (float)g_event_audio.frames / rt_sample_rate;
         if (saved == 0) {
+            (void)sox_denoise_wav_inplace(audio_path, "realtime-event");
             printf("[RT] Audio saved: %s (%d frames, %.1fs)\n",
                    audio_path, g_event_audio.frames, duration);
         }
@@ -638,6 +659,10 @@ static void *rt_monitor_thread(void *arg) {
 
             float chunk_data[frames_per_chunk];
             rt_ring_get_latest(&rt_ring, chunk_data, frames_per_chunk);
+            if (sox_denoise_is_ready()) {
+                (void)sox_denoise_buffer_inplace(chunk_data, frames_per_chunk, rt_sample_rate, 1,
+                                                 "realtime-window");
+            }
 
             audio_buffer_t audio;
             audio.data = chunk_data;
@@ -760,6 +785,8 @@ static int rt_start(const char *device) {
         return -2;
     }
 
+    apply_rt_capture_mixer();
+
     // 打开音频设备。优先使用第二个摄像头，失败则尝试第一个摄像头。
     rt_cap = capture_open(rt_device, rt_sample_rate, 1, 60);
     if (!rt_cap && strcmp(rt_device, DEFAULT_RT_DEVICE) == 0) {
@@ -775,6 +802,10 @@ static int rt_start(const char *device) {
         pthread_mutex_unlock(&rt_mutex);
         return -3;
     }
+
+    capture_set_gain(rt_cap, g_rt_capture_volume);
+    printf("[RT] Capture gain set to %.2f (%.0f%%)\n",
+           g_rt_capture_volume, g_rt_capture_volume * 100.0f);
 
     ret = capture_start(rt_cap);
     if (ret != 0) {
@@ -892,6 +923,327 @@ static int path_exists(const char *path) {
     if (!path || path[0] == '\0') return 0;
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+static int parse_bool_text_local(const char *value, int default_value) {
+    if (!value || value[0] == '\0') return default_value;
+    if (strcmp(value, "1") == 0 ||
+        strcasecmp(value, "true") == 0 ||
+        strcasecmp(value, "yes") == 0 ||
+        strcasecmp(value, "on") == 0) {
+        return 1;
+    }
+    if (strcmp(value, "0") == 0 ||
+        strcasecmp(value, "false") == 0 ||
+        strcasecmp(value, "no") == 0 ||
+        strcasecmp(value, "off") == 0) {
+        return 0;
+    }
+    return default_value;
+}
+
+static std::string shell_quote_single(const char *input) {
+    std::string out = "'";
+    if (input) {
+        for (const char *p = input; *p; ++p) {
+            if (*p == '\'') {
+                out += "'\\''";
+            } else {
+                out.push_back(*p);
+            }
+        }
+    }
+    out += "'";
+    return out;
+}
+
+static void init_rt_capture_mixer_config() {
+    const char *env_enabled = getenv("RT_AMIXER_ENABLED");
+    const char *env_card = getenv("RT_AMIXER_CARD");
+    const char *env_control = getenv("RT_AMIXER_CONTROL");
+    const char *env_volume = getenv("RT_AMIXER_VOLUME");
+
+    g_rt_amixer_enabled = parse_bool_text_local(env_enabled, 1);
+    if (!g_rt_amixer_enabled) {
+        printf("[RT] Hardware amixer setup disabled by RT_AMIXER_ENABLED=%s\n",
+               env_enabled ? env_enabled : "0");
+        return;
+    }
+
+    if (env_card && env_card[0]) {
+        strncpy(g_rt_amixer_card, env_card, sizeof(g_rt_amixer_card) - 1);
+        g_rt_amixer_card[sizeof(g_rt_amixer_card) - 1] = '\0';
+    }
+    if (env_control && env_control[0]) {
+        strncpy(g_rt_amixer_control, env_control, sizeof(g_rt_amixer_control) - 1);
+        g_rt_amixer_control[sizeof(g_rt_amixer_control) - 1] = '\0';
+    }
+    if (env_volume && env_volume[0]) {
+        strncpy(g_rt_amixer_volume, env_volume, sizeof(g_rt_amixer_volume) - 1);
+        g_rt_amixer_volume[sizeof(g_rt_amixer_volume) - 1] = '\0';
+    }
+
+    if (system("command -v amixer >/dev/null 2>&1") != 0) {
+        g_rt_amixer_enabled = 0;
+        printf("[RT] amixer not found, skip hardware mic setup\n");
+        return;
+    }
+
+    printf("[RT] Hardware mic setup enabled: amixer -c %s sset %s %s\n",
+           g_rt_amixer_card, g_rt_amixer_control, g_rt_amixer_volume);
+}
+
+static void apply_rt_capture_mixer() {
+    if (!g_rt_amixer_enabled) return;
+
+    std::ostringstream cmd;
+    cmd << "amixer -c " << shell_quote_single(g_rt_amixer_card)
+        << " sset " << shell_quote_single(g_rt_amixer_control)
+        << " " << shell_quote_single(g_rt_amixer_volume)
+        << " >/dev/null 2>&1";
+
+    int ret = system(cmd.str().c_str());
+    if (ret != 0) {
+        printf("[RT WARN] Failed to apply hardware mic setup: amixer -c %s sset %s %s (ret=%d)\n",
+               g_rt_amixer_card, g_rt_amixer_control, g_rt_amixer_volume, ret);
+        return;
+    }
+
+    printf("[RT] Applied hardware mic setup: amixer -c %s sset %s %s\n",
+           g_rt_amixer_card, g_rt_amixer_control, g_rt_amixer_volume);
+}
+
+static int create_temp_wav_path(const char *prefix, char *path_out, size_t path_size) {
+    if (!prefix || !path_out || path_size == 0) return -1;
+
+    char tmpl[256];
+    snprintf(tmpl, sizeof(tmpl), "/tmp/%s_XXXXXX.wav", prefix);
+    int fd = mkstemps(tmpl, 4);
+    if (fd < 0) {
+        return -1;
+    }
+    close(fd);
+
+    if (unlink(tmpl) != 0 && errno != ENOENT) {
+        return -1;
+    }
+
+    strncpy(path_out, tmpl, path_size - 1);
+    path_out[path_size - 1] = '\0';
+    return 0;
+}
+
+static int sox_denoise_is_ready() {
+    return g_sox_denoise_enabled && g_sox_denoise_profile[0] != '\0';
+}
+
+static int sox_denoise_wav_to_path(const char *input_wav,
+                                   const char *output_wav,
+                                   const char *context) {
+    if (!sox_denoise_is_ready()) return -1;
+    if (!input_wav || !output_wav) return -1;
+
+    std::ostringstream cmd;
+    cmd << shell_quote_single(g_sox_bin)
+        << " " << shell_quote_single(input_wav)
+        << " " << shell_quote_single(output_wav)
+        << " noisered "
+        << shell_quote_single(g_sox_denoise_profile)
+        << " " << g_sox_denoise_amount
+        << " >/dev/null 2>&1";
+
+    int ret = system(cmd.str().c_str());
+    if (ret != 0) {
+        printf("[DENOISE] SoX 失败: context=%s, in=%s, out=%s, profile=%s, amount=%.2f, ret=%d\n",
+               context ? context : "unknown",
+               input_wav,
+               output_wav,
+               g_sox_denoise_profile,
+               g_sox_denoise_amount,
+               ret);
+        return -1;
+    }
+    return 0;
+}
+
+static int sox_denoise_wav_to_temp(const char *input_wav,
+                                   char *output_wav,
+                                   size_t output_size,
+                                   const char *context) {
+    if (!sox_denoise_is_ready()) return -1;
+    if (create_temp_wav_path("yamnet_sox_out", output_wav, output_size) != 0) {
+        printf("[DENOISE] 创建临时输出文件失败: context=%s\n", context ? context : "unknown");
+        return -1;
+    }
+
+    if (sox_denoise_wav_to_path(input_wav, output_wav, context) != 0) {
+        unlink(output_wav);
+        output_wav[0] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
+static int sox_denoise_wav_inplace(const char *wav_path, const char *context) {
+    if (!sox_denoise_is_ready()) return -1;
+    if (!wav_path || wav_path[0] == '\0') return -1;
+
+    char denoised_path[512] = {0};
+    if (sox_denoise_wav_to_temp(wav_path, denoised_path, sizeof(denoised_path), context) != 0) {
+        return -1;
+    }
+
+    if (rename(denoised_path, wav_path) != 0) {
+        printf("[DENOISE] 覆盖目标文件失败: context=%s, target=%s, err=%s\n",
+               context ? context : "unknown", wav_path, strerror(errno));
+        unlink(denoised_path);
+        return -1;
+    }
+    return 0;
+}
+
+static int sox_denoise_buffer_inplace(float *data,
+                                      int num_frames,
+                                      int sample_rate,
+                                      int num_channels,
+                                      const char *context) {
+    if (!sox_denoise_is_ready()) return 0;
+    if (!data || num_frames <= 0 || sample_rate <= 0 || num_channels <= 0) return -1;
+
+    char input_wav[512] = {0};
+    char output_wav[512] = {0};
+    audio_buffer_t denoised_audio;
+    memset(&denoised_audio, 0, sizeof(denoised_audio));
+    int ret = -1;
+
+    if (create_temp_wav_path("yamnet_sox_in", input_wav, sizeof(input_wav)) != 0) {
+        printf("[DENOISE] 创建临时输入文件失败: context=%s\n", context ? context : "unknown");
+        goto cleanup;
+    }
+
+    if (save_audio(input_wav, data, num_frames, sample_rate, num_channels) != 0) {
+        printf("[DENOISE] 写入临时 wav 失败: context=%s\n", context ? context : "unknown");
+        goto cleanup;
+    }
+
+    if (sox_denoise_wav_to_temp(input_wav, output_wav, sizeof(output_wav), context) != 0) {
+        goto cleanup;
+    }
+
+    if (read_audio(output_wav, &denoised_audio) != 0) {
+        printf("[DENOISE] 读取降噪结果失败: context=%s\n", context ? context : "unknown");
+        goto cleanup;
+    }
+
+    if (denoised_audio.num_channels != num_channels) {
+        if (num_channels == 1 && denoised_audio.num_channels == 2) {
+            if (convert_channels(&denoised_audio) != 0) {
+                printf("[DENOISE] 声道转换失败: context=%s\n", context ? context : "unknown");
+                goto cleanup;
+            }
+        } else {
+            printf("[DENOISE] 声道数不匹配: context=%s, expected=%d, got=%d\n",
+                   context ? context : "unknown", num_channels, denoised_audio.num_channels);
+            goto cleanup;
+        }
+    }
+
+    if (denoised_audio.sample_rate != sample_rate) {
+        if (resample_audio(&denoised_audio, denoised_audio.sample_rate, sample_rate) != 0) {
+            printf("[DENOISE] 重采样失败: context=%s, expected=%d, got=%d\n",
+                   context ? context : "unknown", sample_rate, denoised_audio.sample_rate);
+            goto cleanup;
+        }
+    }
+
+    {
+        int copy_frames = std::min(num_frames, denoised_audio.num_frames);
+        memcpy(data, denoised_audio.data, copy_frames * sizeof(float));
+        if (copy_frames < num_frames) {
+            memset(data + copy_frames, 0, (num_frames - copy_frames) * sizeof(float));
+        }
+    }
+
+    ret = 0;
+
+cleanup:
+    if (denoised_audio.data) free(denoised_audio.data);
+    if (input_wav[0]) unlink(input_wav);
+    if (output_wav[0]) unlink(output_wav);
+    return ret;
+}
+
+static void init_sox_denoise_config() {
+    const char *env_enabled = getenv("SOX_DENOISE_ENABLED");
+    const char *env_bin = getenv("SOX_BIN");
+    const char *env_profile = getenv("SOX_DENOISE_PROFILE");
+    const char *env_amount = getenv("SOX_DENOISE_AMOUNT");
+
+    if (env_bin && env_bin[0]) {
+        strncpy(g_sox_bin, env_bin, sizeof(g_sox_bin) - 1);
+        g_sox_bin[sizeof(g_sox_bin) - 1] = '\0';
+    }
+
+    if (env_amount && env_amount[0]) {
+        float amount = (float)atof(env_amount);
+        if (amount > 0.0f && amount <= 1.0f) {
+            g_sox_denoise_amount = amount;
+        }
+    }
+
+    int enabled = parse_bool_text_local(env_enabled, 1);
+    if (!enabled) {
+        g_sox_denoise_enabled = 0;
+        printf("[DENOISE] SoX 降噪已禁用 (SOX_DENOISE_ENABLED=%s)\n",
+               env_enabled ? env_enabled : "0");
+        return;
+    }
+
+    if (env_profile && env_profile[0] && path_exists(env_profile)) {
+        strncpy(g_sox_denoise_profile, env_profile, sizeof(g_sox_denoise_profile) - 1);
+        g_sox_denoise_profile[sizeof(g_sox_denoise_profile) - 1] = '\0';
+    } else {
+        const char *candidates[] = {
+            "../../../speech_camera2_80.prof",
+            "../../../noise_camera2.prof",
+            "../../../noise.prof",
+            "../../speech_camera2_80.prof",
+            "../../noise_camera2.prof",
+            "../../noise.prof",
+            "../speech_camera2_80.prof",
+            "../noise_camera2.prof",
+            "../noise.prof",
+            "./speech_camera2_80.prof",
+            "./noise_camera2.prof",
+            "./noise.prof",
+            NULL
+        };
+        for (int i = 0; candidates[i] != NULL; ++i) {
+            if (path_exists(candidates[i])) {
+                strncpy(g_sox_denoise_profile, candidates[i], sizeof(g_sox_denoise_profile) - 1);
+                g_sox_denoise_profile[sizeof(g_sox_denoise_profile) - 1] = '\0';
+                break;
+            }
+        }
+    }
+
+    if (g_sox_denoise_profile[0] == '\0') {
+        g_sox_denoise_enabled = 0;
+        printf("[DENOISE] 未找到 noise profile，SoX 降噪保持关闭\n");
+        return;
+    }
+
+    std::ostringstream probe_cmd;
+    probe_cmd << "command -v " << shell_quote_single(g_sox_bin) << " >/dev/null 2>&1";
+    if (system(probe_cmd.str().c_str()) != 0) {
+        g_sox_denoise_enabled = 0;
+        printf("[DENOISE] 未找到 SoX 可执行文件: %s\n", g_sox_bin);
+        return;
+    }
+
+    g_sox_denoise_enabled = 1;
+    printf("[DENOISE] SoX 降噪已启用: bin=%s, profile=%s, amount=%.2f\n",
+           g_sox_bin, g_sox_denoise_profile, g_sox_denoise_amount);
 }
 
 static int parse_seconds_from_query(const char *query, int default_sec, int max_sec) {
@@ -1128,6 +1480,7 @@ static int save_anomaly_audio_to_file(const char *original_path, float *audio_da
 
     int ret = save_audio(filename, audio_data, num_frames, sample_rate, num_channels);
     if (ret == 0) {
+        (void)sox_denoise_wav_inplace(filename, "offline-anomaly");
         printf("[ANOMALY_SAVE] Saved anomaly audio: %s (%.1fs, keywords: %s)\n",
                filename, (float)num_frames / sample_rate, event_keywords);
     } else {
@@ -1224,6 +1577,8 @@ static int analyze_audio(const char *audio_path, char *result_json, size_t json_
     char temp_wav[512] = {0};
     char *actual_path = NULL;
     int need_delete_temp = 0;
+    char denoised_wav[512] = {0};
+    int need_delete_denoised = 0;
     double inference_start = 0.0;
     double chunk_inference_total = 0.0;
     int inference_chunk_count = 0;
@@ -1249,6 +1604,13 @@ static int analyze_audio(const char *audio_path, char *result_json, size_t json_
         actual_path = (char*)audio_path;
     }
 
+    if (sox_denoise_is_ready() && actual_path && path_exists(actual_path)) {
+        if (sox_denoise_wav_to_temp(actual_path, denoised_wav, sizeof(denoised_wav), "offline-analyze") == 0) {
+            actual_path = denoised_wav;
+            need_delete_denoised = 1;
+        }
+    }
+
     printf("[ANALYZE] Loading audio: %s\n", actual_path);
 
     // 读取音频
@@ -1257,6 +1619,9 @@ static int analyze_audio(const char *audio_path, char *result_json, size_t json_
         snprintf(result_json, json_size, "{\"success\": false, \"error\": \"Failed to read audio file\"}");
         if (need_delete_temp && temp_wav[0]) {
             unlink(temp_wav);
+        }
+        if (need_delete_denoised && denoised_wav[0]) {
+            unlink(denoised_wav);
         }
         return -1;
     }
@@ -1443,6 +1808,9 @@ cleanup:
     if (full_audio.data) free(full_audio.data);
     if (need_delete_temp && temp_wav[0]) {
         unlink(temp_wav);
+    }
+    if (need_delete_denoised && denoised_wav[0]) {
+        unlink(denoised_wav);
     }
     return 0;
 }
@@ -1655,8 +2023,14 @@ void handle_realtime_status(int client_fd) {
 
     char result[512];
     snprintf(result, sizeof(result),
-        "{\"running\": %s, \"device\": \"%s\", \"sample_rate\": %d}",
-        running ? "true" : "false", device, rt_sample_rate);
+        "{\"running\": %s, \"device\": \"%s\", \"sample_rate\": %d, "
+        "\"capture_volume\": %.2f, \"mixer_enabled\": %s, \"mixer_card\": \"%s\", "
+        "\"mixer_control\": \"%s\", \"mixer_volume\": \"%s\"}",
+        running ? "true" : "false", device, rt_sample_rate, g_rt_capture_volume,
+        g_rt_amixer_enabled ? "true" : "false",
+        g_rt_amixer_card,
+        g_rt_amixer_control,
+        g_rt_amixer_volume);
     send_response(client_fd, "200 OK", "application/json", result, strlen(result));
 }
 
@@ -1901,15 +2275,28 @@ void handle_realtime_transcript(int client_fd, const char *query) {
 }
 
 void handle_config(int client_fd) {
-    char body[2048];
+    char body[4096];
     snprintf(body, sizeof(body),
         "{\"model_path\": \"%s\", \"anomaly_threshold\": %.2f, \"save_anomaly\": %d, "
-        "\"keywords_count\": %d, \"asr_enabled\": %s, \"asr_model_cn\": \"%s\", \"asr_model_en\": \"%s\"}",
+        "\"keywords_count\": %d, \"asr_enabled\": %s, \"asr_model_cn\": \"%s\", \"asr_model_en\": \"%s\", "
+        "\"sox_denoise_enabled\": %s, \"sox_bin\": \"%s\", \"sox_denoise_profile\": \"%s\", "
+        "\"sox_denoise_amount\": %.2f, \"rt_capture_volume\": %.2f, "
+        "\"rt_amixer_enabled\": %s, \"rt_amixer_card\": \"%s\", "
+        "\"rt_amixer_control\": \"%s\", \"rt_amixer_volume\": \"%s\"}",
         model_path, config.anomaly_threshold, config.save_anomaly,
         (int)(sizeof(anomaly_keywords) / sizeof(AnomalyKeyword)),
         g_asr_enabled ? "true" : "false",
         g_asr_model_cn,
-        g_asr_model_en);
+        g_asr_model_en,
+        sox_denoise_is_ready() ? "true" : "false",
+        g_sox_bin,
+        g_sox_denoise_profile,
+        g_sox_denoise_amount,
+        g_rt_capture_volume,
+        g_rt_amixer_enabled ? "true" : "false",
+        g_rt_amixer_card,
+        g_rt_amixer_control,
+        g_rt_amixer_volume);
     send_response(client_fd, "200 OK", "application/json", body, strlen(body));
 }
 
@@ -2152,6 +2539,8 @@ int main(int argc, char *argv[]) {
     const char *auto_rt_env = getenv("AUTO_START_REALTIME");
     const char *rt_print_asr_env = getenv("RT_PRINT_ASR");
     const char *rt_print_window_env = getenv("RT_PRINT_WINDOW");
+    const char *rt_capture_volume_env = getenv("RT_CAPTURE_VOLUME");
+    const char *rt_capture_volume_percent_env = getenv("RT_CAPTURE_VOLUME_PERCENT");
     int auto_start_realtime = 1;
 
     if (auto_rt_env && auto_rt_env[0]) {
@@ -2182,6 +2571,23 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if (rt_capture_volume_env && rt_capture_volume_env[0]) {
+        float volume = (float)atof(rt_capture_volume_env);
+        if (volume > 2.0f && volume <= 200.0f) {
+            volume /= 100.0f;
+        }
+        if (volume >= 0.0f && volume <= 2.0f) {
+            g_rt_capture_volume = volume;
+        }
+    }
+
+    if (rt_capture_volume_percent_env && rt_capture_volume_percent_env[0]) {
+        float volume_percent = (float)atof(rt_capture_volume_percent_env);
+        if (volume_percent >= 0.0f && volume_percent <= 200.0f) {
+            g_rt_capture_volume = volume_percent / 100.0f;
+        }
+    }
+
     if (argc > 1) {
         port = atoi(argv[1]);
     }
@@ -2189,6 +2595,9 @@ int main(int argc, char *argv[]) {
     printf("======================================================================\n");
     printf("  声音异常检测 HTTP 服务器\n");
     printf("======================================================================\n");
+
+    init_rt_capture_mixer_config();
+    init_sox_denoise_config();
 
     // 初始化模型
     if (init_model() != 0) {
@@ -2239,6 +2648,19 @@ int main(int argc, char *argv[]) {
     printf("    export VOSK_LIB_PATH=/path/to/libvosk.so   (可选)\n");
     printf("    export RT_PRINT_ASR=1   # 实时打印每3秒转写（默认开）\n");
     printf("    export RT_PRINT_WINDOW=1   # 实时打印每个3秒检测窗口（默认开）\n");
+    printf("    export RT_AMIXER_ENABLED=1\n");
+    printf("    export RT_AMIXER_CARD=1\n");
+    printf("    export RT_AMIXER_CONTROL=Mic\n");
+    printf("    export RT_AMIXER_VOLUME=80%%\n");
+    printf("    export RT_CAPTURE_VOLUME=1.0   # 软件增益，默认不额外缩放\n");
+    printf("  SoX 降噪配置:\n");
+    printf("    export SOX_DENOISE_ENABLED=1\n");
+    printf("    export SOX_DENOISE_PROFILE=/path/to/speech_camera2_80.prof\n");
+    printf("    export SOX_DENOISE_AMOUNT=0.25\n");
+    printf("    export SOX_BIN=sox\n");
+    printf("  当前硬件麦克风设置: amixer -c %s sset %s %s\n",
+           g_rt_amixer_card, g_rt_amixer_control, g_rt_amixer_volume);
+    printf("  当前软件录音增益: %.2f (%.0f%%)\n", g_rt_capture_volume, g_rt_capture_volume * 100.0f);
     printf("======================================================================\n");
     printf("  示例:\n");
     printf("    curl -X POST http://localhost:%d/analyze \\\n", port);
