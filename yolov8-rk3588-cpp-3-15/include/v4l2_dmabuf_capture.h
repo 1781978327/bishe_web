@@ -26,6 +26,7 @@ struct CaptureConfig {
 struct CaptureContext {
     int fd = -1;
     bool streaming = false;
+    int memory = 0;
     int width = 0;
     int height = 0;
     int wstride = 0;

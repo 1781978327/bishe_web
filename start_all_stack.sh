@@ -29,8 +29,8 @@ elif [[ -f "$ROOT_DIR/noise.prof" ]]; then
   DEFAULT_SOX_DENOISE_PROFILE="$ROOT_DIR/noise.prof"
 fi
 SUDO_PASSWORD="orangepi"
-DEFAULT_CAM0_SOURCE="/dev/v4l/by-path/platform-fc800000.usb-usb-0:1:1.0-video-index0"
-DEFAULT_CAM1_SOURCE="/dev/v4l/by-path/platform-fc880000.usb-usb-0:1:1.0-video-index0"
+DEFAULT_CAM0_SOURCE="/dev/video22"
+DEFAULT_CAM1_SOURCE="/dev/video31"
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
@@ -258,17 +258,17 @@ discover_secondary_camera_source() {
   done
   shopt -u nullglob
 
+  if [[ -e "/dev/video31" ]]; then
+    printf '%s' "/dev/video31"
+    return 0
+  fi
+
   if [[ -e "/dev/video2" ]]; then
     printf '%s' "/dev/video2"
     return 0
   fi
 
-  if [[ -e "/dev/video3" ]]; then
-    printf '%s' "/dev/video3"
-    return 0
-  fi
-
-  printf '%s' "/dev/video2"
+  printf '%s' "$DEFAULT_CAM1_SOURCE"
 }
 
 ensure_vision_mediamtx_config() {
@@ -348,6 +348,7 @@ wait_for_http_ready() {
   local expected_text="${3:-}"
   local status_regex="${4:-^200$}"
   local tries="${5:-40}"
+  local method="${6:-GET}"
 
   if (( DRY_RUN )); then
     return 0
@@ -357,7 +358,7 @@ wait_for_http_ready() {
   local code=""
   local body=""
   for ((i=0; i<tries; i++)); do
-    response="$(curl -sS --max-time 2 -w $'\n%{http_code}' "$url" 2>/dev/null || true)"
+    response="$(curl -sS --max-time 2 -X "$method" -w $'\n%{http_code}' "$url" 2>/dev/null || true)"
     code="${response##*$'\n'}"
     body="${response%$'\n'*}"
     if [[ "$code" =~ $status_regex ]]; then
@@ -398,11 +399,11 @@ SOUND_HTTP_CMD="$SOUND_HTTP_CMD ./rknn_yamnet_demo_http 8089"
 start_service "sound_http" "sudo" "$SOUND_DIR" "$SOUND_HTTP_CMD"
 wait_for_http_ready "sound_http" "http://127.0.0.1:8089/health" '"status": "ok"' '^200$' 40
 
-CAM0_SOURCE="$(resolve_camera_source "${CAM0_SOURCE:-}" "$DEFAULT_CAM0_SOURCE" "/dev/video0" "/dev/video0")"
+CAM0_SOURCE="$(resolve_camera_source "${CAM0_SOURCE:-}" "$DEFAULT_CAM0_SOURCE" "$DEFAULT_CAM0_SOURCE" "$DEFAULT_CAM0_SOURCE")"
 if [[ -n "${CAM1_SOURCE:-}" ]]; then
   CAM1_SOURCE="$CAM1_SOURCE"
 else
-  CAM1_SOURCE="$(resolve_camera_source "" "$DEFAULT_CAM1_SOURCE" "$(discover_secondary_camera_source "$CAM0_SOURCE")" "/dev/video2")"
+  CAM1_SOURCE="$(resolve_camera_source "" "$DEFAULT_CAM1_SOURCE" "$(discover_secondary_camera_source "$CAM0_SOURCE")" "$DEFAULT_CAM1_SOURCE")"
 fi
 
 echo "视觉服务摄像头源："
@@ -412,6 +413,7 @@ echo "  cam1 -> $CAM1_SOURCE"
 ensure_vision_mediamtx_config
 start_service "vision_http" "sudo" "$VISION_DIR" "./rknn_http_ctrl --cam0-source $CAM0_SOURCE --cam1-source $CAM1_SOURCE"
 wait_for_http_ready "vision_http" "http://127.0.0.1:8091/api/status" '"running"' '^200$' 40
+wait_for_http_ready "vision_rtsp" "http://127.0.0.1:8091/api/rtsp/start" '"success"' '^200$' 20 POST
 
 echo
 echo "================ PID Summary ================"

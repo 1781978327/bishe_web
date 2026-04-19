@@ -72,8 +72,13 @@
 #define DEFAULT_MEDIAMTX_LOG "/tmp/mediamtx_auto.log"
 #define DEFAULT_RECORD_OUTPUT_REL_PATH "recordings/camera"
 #define DEFAULT_FFMPEG_BIN "/usr/local/ffmpeg/bin/ffmpeg"
-#define DEFAULT_WIDTH     640
-#define DEFAULT_HEIGHT    640
+#define DEFAULT_CAMERA_WIDTH   1280
+#define DEFAULT_CAMERA_HEIGHT  720
+#define DEFAULT_CAMERA_FPS     30
+#define DEFAULT_CAM0_INDEX     22
+#define DEFAULT_CAM1_INDEX     31
+#define DEFAULT_CAM0_SOURCE    "/dev/video22"
+#define DEFAULT_CAM1_SOURCE    "/dev/video31"
 #define SLOTS_PER_CAM     3  // 每摄像头 3 个 slot
 
 int g_http_port = DEFAULT_HTTP_PORT;
@@ -84,8 +89,8 @@ std::string g_rtsp_url_0 = "rtsp://127.0.0.1:8554/cam0";
 std::string g_rtsp_url_1 = "rtsp://127.0.0.1:8554/cam1";
 std::string g_rtsp_url_mosaic = "rtsp://127.0.0.1:8554/cam2";
 std::string g_rtsp_url_video = "rtsp://127.0.0.1:8554/cam3";
-std::string g_input_source_cam0 = "/dev/video0";
-std::string g_input_source_cam1 = "/dev/video2";
+std::string g_input_source_cam0 = DEFAULT_CAM0_SOURCE;
+std::string g_input_source_cam1 = DEFAULT_CAM1_SOURCE;
 bool g_input_source_cam0_dmabuf = false;
 bool g_input_source_cam1_dmabuf = false;
 std::string g_mediamtx_bin;
@@ -115,6 +120,12 @@ std::atomic<bool> g_model_loading(false);
 std::atomic<int>  g_current_cam(0);
 std::atomic<int>  g_cam0_fps(0), g_cam1_fps(0);
 std::atomic<int>  g_rtsp_cam0_fps(0), g_rtsp_cam1_fps(0), g_rtsp_mosaic_fps(0), g_rtsp_video_fps(0);
+std::atomic<int>  g_cam0_input_width(DEFAULT_CAMERA_WIDTH);
+std::atomic<int>  g_cam0_input_height(DEFAULT_CAMERA_HEIGHT);
+std::atomic<int>  g_cam0_input_nominal_fps(DEFAULT_CAMERA_FPS);
+std::atomic<int>  g_cam1_input_width(DEFAULT_CAMERA_WIDTH);
+std::atomic<int>  g_cam1_input_height(DEFAULT_CAMERA_HEIGHT);
+std::atomic<int>  g_cam1_input_nominal_fps(DEFAULT_CAMERA_FPS);
 std::mutex g_model_mutex;
 std::string g_model_path = DEFAULT_MODEL_PATH;
 std::string g_label_path = "";
@@ -140,6 +151,20 @@ std::vector<std::vector<TrackerResultItem>> g_tracker_results;  // 每个 slot �
 
 void draw_rtsp_fps_overlay(cv::Mat& frame, int fps_value);
 std::string label_name_for_detection(const DetectionResultItem& det);
+
+void update_camera_input_runtime_info(int cam, int width, int height, int fps) {
+    if (cam == 0) {
+        if (width > 0) g_cam0_input_width.store(width);
+        if (height > 0) g_cam0_input_height.store(height);
+        if (fps > 0) g_cam0_input_nominal_fps.store(fps);
+        return;
+    }
+    if (cam == 1) {
+        if (width > 0) g_cam1_input_width.store(width);
+        if (height > 0) g_cam1_input_height.store(height);
+        if (fps > 0) g_cam1_input_nominal_fps.store(fps);
+    }
+}
 
 // RTSP 推流
 #ifdef USE_RTSP_MPP
@@ -328,6 +353,34 @@ static bool ensure_slot_bgr_dmabuf(SlotBgrDmabuf* slot, int width, int height) {
     slot->hstride = height;
     slot->mat = cv::Mat(height, width, CV_8UC3, slot->ptr, (size_t)width * 3);
     return !slot->mat.empty();
+}
+
+static bool convert_camera_dmabuf_to_bgr_slot(const CameraDmabufFrameInfo& src, SlotBgrDmabuf* slot) {
+    if (!slot || !slot->buffer || slot->fd < 0 || !slot->ptr) return false;
+    if (!src.valid || src.fd < 0 || src.width <= 0 || src.height <= 0) return false;
+
+    const int src_wstride = src.wstride > 0 ? src.wstride : src.width;
+    const int src_hstride = src.hstride > 0 ? src.hstride : src.height;
+    rga_buffer_t src_buf = wrapbuffer_fd(src.fd, src.width, src.height, src.rga_format,
+                                         src_wstride, src_hstride);
+    rga_buffer_t dst_buf = wrapbuffer_fd(slot->fd, slot->width, slot->height, RK_FORMAT_BGR_888,
+                                         slot->wstride, slot->hstride);
+
+    im_rect src_rect = {0, 0, src.width, src.height};
+    im_rect dst_rect = {0, 0, slot->width, slot->height};
+    int check = imcheck(src_buf, dst_buf, src_rect, dst_rect);
+    if (check != IM_STATUS_SUCCESS && check != IM_STATUS_NOERROR) {
+        return false;
+    }
+
+    IM_STATUS status = improcess(src_buf, dst_buf,
+                                 wrapbuffer_virtualaddr(nullptr, 0, 0, RK_FORMAT_RGBA_8888),
+                                 src_rect, dst_rect, im_rect{0, 0, 0, 0}, IM_SYNC);
+    if (status != IM_STATUS_SUCCESS && status != IM_STATUS_NOERROR) {
+        return false;
+    }
+
+    return true;
 }
 #endif
 
@@ -1071,8 +1124,8 @@ bool is_auto_source_text(const std::string& source_text) {
 }
 
 void maybe_auto_assign_camera_sources(bool cam0_source_user_set, bool cam1_source_user_set) {
-    bool cam0_needs_auto = (!cam0_source_user_set) || is_auto_source_text(g_input_source_cam0);
-    bool cam1_needs_auto = (!cam1_source_user_set) || is_auto_source_text(g_input_source_cam1);
+    bool cam0_needs_auto = (!cam0_source_user_set) && is_auto_source_text(g_input_source_cam0);
+    bool cam1_needs_auto = (!cam1_source_user_set) && is_auto_source_text(g_input_source_cam1);
     if (!cam0_needs_auto && !cam1_needs_auto) {
         return;
     }
@@ -1477,7 +1530,10 @@ bool ensure_camera_rtsp_ready_for_recording(int cam, std::string* detail) {
                 g_rtsp_sender0 = nullptr;
             }
             g_rtsp_sender0 = new RtspMppSender();
-            if (!g_rtsp_sender0->init(g_rtsp_url_0.c_str(), 640, 480, 30)) {
+            if (!g_rtsp_sender0->init(g_rtsp_url_0.c_str(),
+                                      DEFAULT_CAMERA_WIDTH,
+                                      DEFAULT_CAMERA_HEIGHT,
+                                      DEFAULT_CAMERA_FPS)) {
                 delete g_rtsp_sender0;
                 g_rtsp_sender0 = nullptr;
                 printf("[Record] Cam0 RTSP 启动失败: %s\n", g_rtsp_url_0.c_str());
@@ -1492,7 +1548,10 @@ bool ensure_camera_rtsp_ready_for_recording(int cam, std::string* detail) {
                 g_rtsp_sender1 = nullptr;
             }
             g_rtsp_sender1 = new RtspMppSender();
-            if (!g_rtsp_sender1->init(g_rtsp_url_1.c_str(), 640, 480, 30)) {
+            if (!g_rtsp_sender1->init(g_rtsp_url_1.c_str(),
+                                      DEFAULT_CAMERA_WIDTH,
+                                      DEFAULT_CAMERA_HEIGHT,
+                                      DEFAULT_CAMERA_FPS)) {
                 delete g_rtsp_sender1;
                 g_rtsp_sender1 = nullptr;
                 printf("[Record] Cam1 RTSP 启动失败: %s\n", g_rtsp_url_1.c_str());
@@ -3664,9 +3723,13 @@ void handle_client(int client_fd) {
             return;
         } else {
             // 摄像头模式：创建摄像头推流器
-            // 摄像头采集端设置为 30fps，这里保持一致，避免推送时基与实际送帧速率不一致导致播放器卡顿感。
-            int cam0_w = 640, cam0_h = 480, cam0_fps = 30;
-            int cam1_w = 640, cam1_h = 480, cam1_fps = 30;
+            // 优先使用当前采集链路的实际分辨率，避免 sender 分辨率和输入帧尺寸不一致导致首帧即断流。
+            int cam0_w = g_cam0_input_width.load();
+            int cam0_h = g_cam0_input_height.load();
+            int cam0_fps = g_cam0_input_nominal_fps.load();
+            int cam1_w = g_cam1_input_width.load();
+            int cam1_h = g_cam1_input_height.load();
+            int cam1_fps = g_cam1_input_nominal_fps.load();
             bool cam0_ok = (g_rtsp_sender0 != nullptr && g_rtsp_sender0->inited());
             bool cam1_ok = (g_rtsp_sender1 != nullptr && g_rtsp_sender1->inited());
             if (!cam0_ok) {
@@ -4236,10 +4299,18 @@ int main(int argc, char** argv) {
     std::string cap0_err;
     std::string cap1_err;
 
-    bool cap0_ok = open_camera_input_source(g_input_source_cam0, 0, 640, 480, 30,
+    bool cap0_ok = open_camera_input_source(g_input_source_cam0,
+                                            DEFAULT_CAM0_INDEX,
+                                            DEFAULT_CAMERA_WIDTH,
+                                            DEFAULT_CAMERA_HEIGHT,
+                                            DEFAULT_CAMERA_FPS,
                                             &dmabuf_cap0, &cap0,
                                             &g_input_source_cam0_dmabuf, &cap0_norm, &cap0_err);
-    bool cap1_ok = open_camera_input_source(g_input_source_cam1, 2, 640, 480, 30,
+    bool cap1_ok = open_camera_input_source(g_input_source_cam1,
+                                            DEFAULT_CAM1_INDEX,
+                                            DEFAULT_CAMERA_WIDTH,
+                                            DEFAULT_CAMERA_HEIGHT,
+                                            DEFAULT_CAMERA_FPS,
                                             &dmabuf_cap1, &cap1,
                                             &g_input_source_cam1_dmabuf, &cap1_norm, &cap1_err);
     if (!cap0_norm.empty()) g_input_source_cam0 = cap0_norm;
@@ -4247,12 +4318,17 @@ int main(int argc, char** argv) {
 
     if (cap0_ok) {
         if (g_input_source_cam0_dmabuf) {
+            update_camera_input_runtime_info(0, dmabuf_cap0.width, dmabuf_cap0.height, DEFAULT_CAMERA_FPS);
             printf("[Capture] Cam0 输入已打开(DMABUF): %s (%dx%d @ %dfps)\n",
-                   g_input_source_cam0.c_str(), dmabuf_cap0.width, dmabuf_cap0.height, 30);
+                   g_input_source_cam0.c_str(),
+                   dmabuf_cap0.width,
+                   dmabuf_cap0.height,
+                   DEFAULT_CAMERA_FPS);
         } else {
             int w = (int)cap0.get(cv::CAP_PROP_FRAME_WIDTH);
             int h = (int)cap0.get(cv::CAP_PROP_FRAME_HEIGHT);
             double fps = cap0.get(cv::CAP_PROP_FPS);
+            update_camera_input_runtime_info(0, w, h, fps > 0.0 ? (int)(fps + 0.5) : DEFAULT_CAMERA_FPS);
             printf("[Capture] Cam0 输入已打开(OpenCV): %s (%dx%d @ %.1ffps)\n",
                    g_input_source_cam0.c_str(), w, h, fps);
         }
@@ -4263,12 +4339,17 @@ int main(int argc, char** argv) {
 
     if (cap1_ok) {
         if (g_input_source_cam1_dmabuf) {
+            update_camera_input_runtime_info(1, dmabuf_cap1.width, dmabuf_cap1.height, DEFAULT_CAMERA_FPS);
             printf("[Capture] Cam1 输入已打开(DMABUF): %s (%dx%d @ %dfps)\n",
-                   g_input_source_cam1.c_str(), dmabuf_cap1.width, dmabuf_cap1.height, 30);
+                   g_input_source_cam1.c_str(),
+                   dmabuf_cap1.width,
+                   dmabuf_cap1.height,
+                   DEFAULT_CAMERA_FPS);
         } else {
             int w = (int)cap1.get(cv::CAP_PROP_FRAME_WIDTH);
             int h = (int)cap1.get(cv::CAP_PROP_FRAME_HEIGHT);
             double fps = cap1.get(cv::CAP_PROP_FPS);
+            update_camera_input_runtime_info(1, w, h, fps > 0.0 ? (int)(fps + 0.5) : DEFAULT_CAMERA_FPS);
             printf("[Capture] Cam1 输入已打开(OpenCV): %s (%dx%d @ %.1ffps)\n",
                    g_input_source_cam1.c_str(), w, h, fps);
         }
@@ -4594,7 +4675,7 @@ int main(int argc, char** argv) {
             bool should_release_cv_on_fail = false;
 #ifdef USE_RTSP_MPP
             SlotBgrDmabuf* out_slot = nullptr;
-            if (rtsp_prebind_dma && g_rtsp_streaming.load() && i >= 0 && i < (int)slot_output_buffers.size()) {
+            if (g_rtsp_streaming.load() && i >= 0 && i < (int)slot_output_buffers.size()) {
                 out_slot = &slot_output_buffers[i];
             }
 #endif
@@ -4658,17 +4739,37 @@ int main(int argc, char** argv) {
                         std::string normalized_source;
                         std::string reopen_err;
                         const std::string src = (cam == 0) ? g_input_source_cam0 : g_input_source_cam1;
-                        int default_index = (cam == 0) ? 0 : 2;
-                        bool reopened = open_camera_input_source(src, default_index, 640, 480, 30,
+                        int default_index = (cam == 0) ? DEFAULT_CAM0_INDEX : DEFAULT_CAM1_INDEX;
+                        bool reopened = open_camera_input_source(src,
+                                                                 default_index,
+                                                                 DEFAULT_CAMERA_WIDTH,
+                                                                 DEFAULT_CAMERA_HEIGHT,
+                                                                 DEFAULT_CAMERA_FPS,
                                                                  active_cap, active_cv_cap,
                                                                  &using_dmabuf, &normalized_source, &reopen_err);
                         if (reopened) {
                             if (cam == 0) {
                                 g_input_source_cam0_dmabuf = using_dmabuf;
                                 if (!normalized_source.empty()) g_input_source_cam0 = normalized_source;
+                                if (using_dmabuf) {
+                                    update_camera_input_runtime_info(0, active_cap->width, active_cap->height, DEFAULT_CAMERA_FPS);
+                                } else if (active_cv_cap && active_cv_cap->isOpened()) {
+                                    int w = (int)active_cv_cap->get(cv::CAP_PROP_FRAME_WIDTH);
+                                    int h = (int)active_cv_cap->get(cv::CAP_PROP_FRAME_HEIGHT);
+                                    double fps = active_cv_cap->get(cv::CAP_PROP_FPS);
+                                    update_camera_input_runtime_info(0, w, h, fps > 0.0 ? (int)(fps + 0.5) : DEFAULT_CAMERA_FPS);
+                                }
                             } else {
                                 g_input_source_cam1_dmabuf = using_dmabuf;
                                 if (!normalized_source.empty()) g_input_source_cam1 = normalized_source;
+                                if (using_dmabuf) {
+                                    update_camera_input_runtime_info(1, active_cap->width, active_cap->height, DEFAULT_CAMERA_FPS);
+                                } else if (active_cv_cap && active_cv_cap->isOpened()) {
+                                    int w = (int)active_cv_cap->get(cv::CAP_PROP_FRAME_WIDTH);
+                                    int h = (int)active_cv_cap->get(cv::CAP_PROP_FRAME_HEIGHT);
+                                    double fps = active_cv_cap->get(cv::CAP_PROP_FPS);
+                                    update_camera_input_runtime_info(1, w, h, fps > 0.0 ? (int)(fps + 0.5) : DEFAULT_CAMERA_FPS);
+                                }
                             }
                             printf("[Capture] Cam%d 输入重连成功: source=%s mode=%s\n",
                                    cam, normalized_source.c_str(), using_dmabuf ? "dmabuf" : "opencv");
@@ -4679,22 +4780,26 @@ int main(int argc, char** argv) {
                     }
                 }
 #ifdef USE_RTSP_MPP
+                bool render_camera_dmabuf_to_slot = false;
                 if (out_slot) {
                     int cw = 0;
                     int ch = 0;
                     if (active_cap && active_cap->fd >= 0 && active_cap->streaming) {
                         cw = active_cap->width;
                         ch = active_cap->height;
-                    } else if (active_cv_cap && active_cv_cap->isOpened()) {
-                        cw = (int)active_cv_cap->get(cv::CAP_PROP_FRAME_WIDTH);
-                        ch = (int)active_cv_cap->get(cv::CAP_PROP_FRAME_HEIGHT);
-                    }
-                    if (cw > 0 && ch > 0 && ensure_slot_bgr_dmabuf(out_slot, cw, ch)) {
-                        frame = out_slot->mat;
+                        if (cw > 0 && ch > 0 && ensure_slot_bgr_dmabuf(out_slot, cw, ch)) {
+                            render_camera_dmabuf_to_slot = true;
+                        }
                     }
                 }
 #endif
-                frame_ok = acquire_camera_frame(active_cap, active_cv_cap, &frame, &camera_frame_info);
+                frame_ok = acquire_camera_frame(active_cap, active_cv_cap, &frame, &camera_frame_info,
+#ifdef USE_RTSP_MPP
+                                               !render_camera_dmabuf_to_slot
+#else
+                                               true
+#endif
+                                               );
                 if (frame_ok && do_inference && camera_frame_info.valid) {
                     (void)worker->prepare_camera_dmabuf_input(camera_frame_info.fd,
                                                               camera_frame_info.width,
@@ -4703,6 +4808,15 @@ int main(int argc, char** argv) {
                                                               camera_frame_info.hstride,
                                                               camera_frame_info.rga_format);
                 }
+#ifdef USE_RTSP_MPP
+                if (frame_ok && camera_frame_info.valid && render_camera_dmabuf_to_slot) {
+                    if (convert_camera_dmabuf_to_bgr_slot(camera_frame_info, out_slot)) {
+                        frame = out_slot->mat;
+                    } else {
+                        frame_ok = convert_camera_dmabuf_to_bgr(active_cap, &camera_frame_info, &frame);
+                    }
+                }
+#endif
                 release_camera_dmabuf_frame(active_cap, &camera_frame_info);
             }
 
@@ -4718,15 +4832,15 @@ int main(int argc, char** argv) {
             bool bound_dma_output = false;
             if (g_rtsp_streaming.load() && i >= 0 && i < (int)slot_output_buffers.size()) {
                 SlotBgrDmabuf& out = slot_output_buffers[i];
-                if (rtsp_prebind_dma) {
-                    bool same_dma_mat = (out.fd >= 0 &&
-                                         out.width == frame.cols &&
-                                         out.height == frame.rows &&
-                                         out.mat.data == frame.data);
-                    if (same_dma_mat) {
-                        worker->ori_img = frame;
-                        bound_dma_output = true;
-                    } else if (ensure_slot_bgr_dmabuf(&out, frame.cols, frame.rows)) {
+                bool same_dma_mat = (out.fd >= 0 &&
+                                     out.width == frame.cols &&
+                                     out.height == frame.rows &&
+                                     out.mat.data == frame.data);
+                if (same_dma_mat) {
+                    worker->ori_img = frame;
+                    bound_dma_output = true;
+                } else if (rtsp_prebind_dma) {
+                    if (ensure_slot_bgr_dmabuf(&out, frame.cols, frame.rows)) {
                         if (out.mat.data != frame.data) {
                             frame.copyTo(out.mat);
                         }

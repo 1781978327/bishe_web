@@ -22,10 +22,15 @@ struct CameraDmabufFrameInfo {
 void release_camera_dmabuf_frame(v4l2_dmabuf::CaptureContext* dmabuf_cap,
                                  CameraDmabufFrameInfo* frame_info);
 
+bool convert_camera_dmabuf_to_bgr(const v4l2_dmabuf::CaptureContext* dmabuf_cap,
+                                  const CameraDmabufFrameInfo* frame_info,
+                                  cv::Mat* frame_out);
+
 bool acquire_camera_frame(v4l2_dmabuf::CaptureContext* dmabuf_cap,
                           cv::VideoCapture* cv_cap,
                           cv::Mat* frame_out,
-                          CameraDmabufFrameInfo* frame_info = nullptr);
+                          CameraDmabufFrameInfo* frame_info = nullptr,
+                          bool convert_to_bgr = true);
 
 bool read_camera_frame(v4l2_dmabuf::CaptureContext* dmabuf_cap,
                        cv::VideoCapture* cv_cap,

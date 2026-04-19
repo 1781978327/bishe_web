@@ -1,5 +1,6 @@
 #include "http_ctrl_camera_io.h"
 
+#include <linux/videodev2.h>
 #include <opencv2/imgproc.hpp>
 
 #include "rga.h"
@@ -14,10 +15,47 @@ void release_camera_dmabuf_frame(v4l2_dmabuf::CaptureContext* dmabuf_cap,
     *frame_info = CameraDmabufFrameInfo{};
 }
 
+bool convert_camera_dmabuf_to_bgr(const v4l2_dmabuf::CaptureContext* dmabuf_cap,
+                                  const CameraDmabufFrameInfo* frame_info,
+                                  cv::Mat* frame_out) {
+    if (!dmabuf_cap || !frame_info || !frame_out || !frame_info->valid || !frame_info->va) {
+        if (frame_out) frame_out->release();
+        return false;
+    }
+    if (frame_info->width <= 0 || frame_info->height <= 0) {
+        frame_out->release();
+        return false;
+    }
+
+    if (dmabuf_cap->pixfmt == V4L2_PIX_FMT_NV12) {
+        size_t step = (size_t)(dmabuf_cap->bytesperline > 0 ? dmabuf_cap->bytesperline
+                                                            : frame_info->width);
+        cv::Mat nv12(frame_info->height + frame_info->height / 2,
+                     frame_info->width,
+                     CV_8UC1,
+                     frame_info->va,
+                     step);
+        cv::cvtColor(nv12, *frame_out, cv::COLOR_YUV2BGR_NV12);
+    } else if (dmabuf_cap->pixfmt == V4L2_PIX_FMT_UYVY) {
+        size_t step = (size_t)(dmabuf_cap->bytesperline > 0 ? dmabuf_cap->bytesperline
+                                                            : frame_info->width * 2);
+        cv::Mat uyvy(frame_info->height, frame_info->width, CV_8UC2, frame_info->va, step);
+        cv::cvtColor(uyvy, *frame_out, cv::COLOR_YUV2BGR_UYVY);
+    } else {
+        size_t step = (size_t)(dmabuf_cap->bytesperline > 0 ? dmabuf_cap->bytesperline
+                                                            : frame_info->width * 2);
+        cv::Mat yuyv(frame_info->height, frame_info->width, CV_8UC2, frame_info->va, step);
+        cv::cvtColor(yuyv, *frame_out, cv::COLOR_YUV2BGR_YUYV);
+    }
+
+    return !frame_out->empty();
+}
+
 bool acquire_camera_frame(v4l2_dmabuf::CaptureContext* dmabuf_cap,
                           cv::VideoCapture* cv_cap,
                           cv::Mat* frame_out,
-                          CameraDmabufFrameInfo* frame_info) {
+                          CameraDmabufFrameInfo* frame_info,
+                          bool convert_to_bgr) {
     if (!frame_out) return false;
     if (frame_info) {
         *frame_info = CameraDmabufFrameInfo{};
@@ -38,14 +76,19 @@ bool acquire_camera_frame(v4l2_dmabuf::CaptureContext* dmabuf_cap,
                 frame_info->height = dmabuf_cap->height;
                 frame_info->wstride = dmabuf_cap->wstride > 0 ? dmabuf_cap->wstride : dmabuf_cap->width;
                 frame_info->hstride = dmabuf_cap->hstride > 0 ? dmabuf_cap->hstride : dmabuf_cap->height;
-                frame_info->rga_format = RK_FORMAT_YUYV_422;
+                if (dmabuf_cap->pixfmt == V4L2_PIX_FMT_NV12) {
+                    frame_info->rga_format = RK_FORMAT_YCbCr_420_SP;
+                } else if (dmabuf_cap->pixfmt == V4L2_PIX_FMT_UYVY) {
+                    frame_info->rga_format = RK_FORMAT_UYVY_422;
+                } else {
+                    frame_info->rga_format = RK_FORMAT_YUYV_422;
+                }
             }
-            if (buffer.va && dmabuf_cap->width > 0 && dmabuf_cap->height > 0) {
-                size_t step = (size_t)(dmabuf_cap->bytesperline > 0 ? dmabuf_cap->bytesperline : dmabuf_cap->width * 2);
-                cv::Mat yuyv(dmabuf_cap->height, dmabuf_cap->width, CV_8UC2, buffer.va, step);
-                cv::cvtColor(yuyv, *frame_out, cv::COLOR_YUV2BGR_YUYV);
+            if (convert_to_bgr) {
+                return convert_camera_dmabuf_to_bgr(dmabuf_cap, frame_info, frame_out);
             }
-            return !frame_out->empty();
+            frame_out->release();
+            return frame_info ? frame_info->valid : true;
         }
         frame_out->release();
         return false;
@@ -65,7 +108,7 @@ bool read_camera_frame(v4l2_dmabuf::CaptureContext* dmabuf_cap,
                        cv::VideoCapture* cv_cap,
                        cv::Mat* frame_out) {
     CameraDmabufFrameInfo frame_info;
-    bool ok = acquire_camera_frame(dmabuf_cap, cv_cap, frame_out, &frame_info);
+    bool ok = acquire_camera_frame(dmabuf_cap, cv_cap, frame_out, &frame_info, true);
     release_camera_dmabuf_frame(dmabuf_cap, &frame_info);
     return ok;
 }
