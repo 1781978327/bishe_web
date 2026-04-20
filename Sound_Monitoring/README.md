@@ -65,27 +65,81 @@ sudo ./rknn_yamnet_demo_http 8089
 - 端口：`8089`
 - 默认模型：`./model/yamnet.rknn`
 - 默认标签：`./model/yamnet_class_map.txt`
-- 默认实时设备：`plughw:CARD=Camera_1,DEV=0`
-- 默认设备失败时会回退到：`plughw:CARD=Camera,DEV=0`
+- 默认实时设备：`parec`
+- `parec` 会直接跟随 Pulse 当前默认麦克风
+- 如果默认信源异常，会回退到：`parec:alsa_input.usb-Web_Camera_Web_Camera_202409021440-02.mono-fallback.2`
 - 如未关闭自动启动，会在服务启动后尝试自动开启实时监测
-- 如果检测到 `SOX_DENOISE_PROFILE`，会在进入模型前先使用 `sox noisered` 做降噪
-- 实时录音默认先执行 `amixer -c 1 sset Mic 80%`
-- 软件增益默认保持 `1.0`，避免和硬件音量叠加导致过度衰减
+- 默认不做额外滤波，直接使用 `parec` 输入
+- 实时录音默认不主动改硬件 Mic 增益，直接沿用系统当前设置
+- 软件增益默认保持 `1.0`
+
+## YAML 音频配置
+
+HTTP 服务启动时会优先读取音频配置文件：
+
+- 仓库内默认文件：`Sound_Monitoring/config/runtime_audio.yaml`
+- 执行 `./scripts/build.sh` 后会复制到：`Sound_Monitoring/build/config/runtime_audio.yaml`
+- 如果你从 `src/build` 启动，程序也会自动尝试向上查找这个文件
+- 也可以通过环境变量 `SOUND_MONITORING_CONFIG=/path/to/runtime_audio.yaml` 指定
+
+当前默认 YAML 就是“只用 `parec`、不改硬件、不走 FFmpeg、不走 SoX”：
+
+```yaml
+realtime:
+  device: "parec"
+  fallback_device: "parec:alsa_input.usb-Web_Camera_Web_Camera_202409021440-02.mono-fallback.2"
+  auto_start: true
+  capture_volume: 1.0
+
+  mixer:
+    enabled: false
+
+  filter:
+    ffmpeg:
+      enabled: false
+    sox:
+      enabled: false
+```
+
+最常改的就是这些键：
+
+- `realtime.device`：实时输入设备，设成 `parec` 就是跟随系统默认麦克风
+- `realtime.mixer.enabled`：是否启动前执行 `amixer`
+- `realtime.filter.ffmpeg.enabled`：是否开启 FFmpeg 实时滤波
+- `realtime.filter.sox.enabled`：是否开启 SoX 降噪
+- `realtime.capture_volume`：软件录音增益，`1.0` 表示不额外放大
+
+## 为什么这里默认使用 parec
+
+在这台机器上，实时录音默认改成 `parec`，而不是直接用 `arecord` 访问 ALSA 原始设备，主要是因为实际测试下来 `parec` 这条链路更稳定，声音更大、底噪更小。
+
+- `parec` 直接跟随 PulseAudio 当前默认麦克风，切换系统默认输入后，服务会自动录到同一个麦克风，不容易录错设备。
+- 当前系统默认麦克风已经设置为第二个摄像头麦克风，这个麦在现场测试里比其他输入更干净，信噪比更好。
+- `parec` 走的是 Pulse 当前已经生效的输入路由、采样率和源音量配置，更接近桌面系统里“正在实际使用”的那条录音链路。
+- `arecord` 更底层，通常需要手动指定 `hw:x,y` 或 `plughw:*`。一旦卡号、设备号或通道选错，就可能录到更吵的那个输入，或者录到没有经过当前默认路由的原始设备。
+- 目前这套配置里，硬件 Mic 增益设为 `60%`，软件录音增益保持 `1.0`，人声足够大，同时没有把底噪一起过度放大。
+
+需要注意：
+
+- 这里效果变好，并不是因为 `parec` 自带了神奇降噪。
+- 更关键的原因是：选对了麦克风、走对了默认输入链路，并且把硬件增益和软件增益配到了一个更合适的组合。
 
 ## 环境变量
 
 ```bash
+export SOUND_MONITORING_CONFIG=/path/to/runtime_audio.yaml
 export AUTO_START_REALTIME=0
 export RT_PRINT_ASR=0
 export VOSK_MODEL_CN=/path/to/vosk-model-small-cn-0.22
 export VOSK_MODEL_EN=/path/to/vosk-model-small-en-us-0.15
 export VOSK_LIB_PATH=/path/to/libvosk.so
-export RT_AMIXER_ENABLED=1
-export RT_AMIXER_CARD=1
+export RT_AMIXER_ENABLED=0
+export RT_AMIXER_CARD=5
 export RT_AMIXER_CONTROL=Mic
-export RT_AMIXER_VOLUME=80%
+export RT_AMIXER_VOLUME=60%
 export RT_CAPTURE_VOLUME=1.0
-export SOX_DENOISE_ENABLED=1
+export RT_FFMPEG_FILTER_ENABLED=0
+export SOX_DENOISE_ENABLED=0
 export SOX_DENOISE_PROFILE=/home/orangepi/Desktop/web/bishebeifen-master/speech_camera2_80.prof
 export SOX_DENOISE_AMOUNT=0.25
 export SOX_BIN=sox
@@ -93,11 +147,13 @@ export SOX_BIN=sox
 
 说明：
 
+- `SOUND_MONITORING_CONFIG`：显式指定 `runtime_audio.yaml` 路径
 - `AUTO_START_REALTIME=0`：禁止启动时自动开启实时监测
 - `RT_PRINT_ASR=0`：关闭实时模式的周期性转写日志
-- `RT_AMIXER_ENABLED=1`：启动实时监测前执行硬件麦克风音量设置
-- `RT_AMIXER_CARD=1`、`RT_AMIXER_CONTROL=Mic`、`RT_AMIXER_VOLUME=80%`：对应 `amixer -c 1 sset Mic 80%`
+- `RT_AMIXER_ENABLED=0|1`：是否在启动实时监测前执行 `amixer`
+- `RT_AMIXER_CARD=5`、`RT_AMIXER_CONTROL=Mic`、`RT_AMIXER_VOLUME=60%`：例如对应 `amixer -c 5 sset Mic 60%`
 - `RT_CAPTURE_VOLUME=1.0`：软件增益，默认不额外放大或缩小
+- `RT_FFMPEG_FILTER_ENABLED=0|1`：显式关闭或开启 FFmpeg 实时滤波
 - `VOSK_MODEL_CN`、`VOSK_MODEL_EN`：显式指定中文/英文模型目录
 - `VOSK_LIB_PATH`：显式指定 `libvosk.so`
 - `SOX_DENOISE_ENABLED=0|1`：显式关闭或开启 SoX 降噪
@@ -107,10 +163,10 @@ export SOX_BIN=sox
 
 当前代码行为：
 
-- `POST /analyze`、`POST /analyze/upload` 在进入模型前会先做一次 SoX 降噪
-- `POST /realtime/start` 启动的实时监测，在每个 3 秒检测窗口进入模型前也会先做 SoX 降噪
-- 保存到 `./alarm_audio/` 和 `./anomaly_audio/` 的异常音频，也会在落盘后做一次 SoX 降噪
-- 如果没找到 profile 或没装 `sox`，会自动跳过，不影响服务启动
+- 默认情况下只用 `parec` 采音，不额外做 FFmpeg 或 SoX 滤波
+- 如果在 YAML 或环境变量里开启 `RT_FFMPEG_FILTER_ENABLED=1`，实时窗口和实时事件音频会先走 FFmpeg 滤波
+- 如果开启 `SOX_DENOISE_ENABLED=1`，`POST /analyze`、`POST /analyze/upload` 以及实时链路里的 SoX fallback 才会启用
+- 如果滤波工具没装好或者 profile 不存在，会自动跳过，不影响服务启动
 
 ## 运行时文件
 
@@ -185,7 +241,7 @@ curl -X POST http://127.0.0.1:8089/analyze/upload \
 ```bash
 curl -X POST http://127.0.0.1:8089/realtime/start \
   -H "Content-Type: application/json" \
-  -d '{"device":"plughw:CARD=Camera_1,DEV=0"}'
+  -d '{"device":"parec"}'
 ```
 
 ### `POST /realtime/stop`
@@ -201,7 +257,7 @@ curl -X POST http://127.0.0.1:8089/realtime/stop
 ```json
 {
   "running": true,
-  "device": "plughw:CARD=Camera_1,DEV=0",
+  "device": "parec",
   "sample_rate": 16000
 }
 ```

@@ -215,7 +215,7 @@ int main(int argc, char **argv)
 {
     // 参数解析
     const char *model_path = NULL;
-    const char *device = "mic_boost";  // 默认使用软件增益设备
+    const char *device = "parec";  // 默认走 Pulse 当前默认麦克风
     int sample_rate = 16000;
     int detection_mode = 0;  // 0=实时, 1=文件
 
@@ -227,10 +227,10 @@ int main(int argc, char **argv)
             case 'r': sample_rate = atoi(optarg); break;
             case 's': g_save_raw = 1; break;
             default:
-                printf("Usage: %s -m <model.rknn> [-d mic_boost] [-r 16000] [-s]\n", argv[0]);
+                printf("Usage: %s -m <model.rknn> [-d parec] [-r 16000] [-s]\n", argv[0]);
                 printf("  -m  模型路径 (required)\n");
-                printf("  -d  ALSA 设备 (default: mic_boost，已启用软件增益)\n");
-                printf("      hw:4,0 = 原始USB摄像头麦，mic_boost = 软件增益版\n");
+                printf("  -d  输入设备 (default: parec，跟随 Pulse 当前默认麦克风)\n");
+                printf("      parec = Pulse 默认麦克风，parec:<source> = 指定 Pulse 信源，hw:4,0 = 直接 ALSA\n");
                 printf("  -r  采样率 (default: 16000)\n");
                 printf("  -s  保存原始录音到 mic_raw.wav\n");
                 return 0;
@@ -239,7 +239,7 @@ int main(int argc, char **argv)
 
     if (!model_path) {
         printf("Error: Model path (-m) is required!\n");
-        printf("Usage: %s -m <model.rknn> [-d hw:0,0] [-r 16000]\n", argv[0]);
+        printf("Usage: %s -m <model.rknn> [-d parec] [-r 16000]\n", argv[0]);
         return -1;
     }
 
@@ -248,7 +248,7 @@ int main(int argc, char **argv)
     printf("  YAMNet Real-time Anomaly Detection\n");
     printf("================================================================================\n");
     printf("  Model:    %s\n", model_path);
-    printf("  Device:   %s (with software gain boost)\n", device);
+    printf("  Device:   %s\n", device);
     printf("  Rate:     %d Hz\n", sample_rate);
     printf("================================================================================\n\n");
 

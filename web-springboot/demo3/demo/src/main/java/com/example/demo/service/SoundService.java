@@ -61,10 +61,10 @@ public class SoundService {
             log.warn("Failed to create upload directory: {}", e.getMessage());
         }
 
-        checkHttpServer();
+        refreshHttpServerAvailability();
     }
 
-    private void checkHttpServer() {
+    private boolean refreshHttpServerAvailability() {
         try {
             URL url = new URL(String.format("http://%s:%d/health", soundServerHost, soundServerPort));
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -76,14 +76,18 @@ public class SoundService {
             if (responseCode == 200) {
                 log.info("  ✓ HTTP API Server available");
                 httpServerAvailable.set(true);
+                conn.disconnect();
+                return true;
             } else {
                 log.warn("  ✗ HTTP API Server returned: {}", responseCode);
                 httpServerAvailable.set(false);
+                conn.disconnect();
+                return false;
             }
-            conn.disconnect();
         } catch (Exception e) {
             log.warn("  ✗ HTTP API Server not available: {}", e.getMessage());
             httpServerAvailable.set(false);
+            return false;
         }
     }
 
@@ -92,6 +96,7 @@ public class SoundService {
     }
 
     public Map<String, Object> getMonitoringStatus() {
+        refreshHttpServerAvailability();
         syncMonitoringEnabledFromRealtimeStatus();
         Map<String, Object> status = new HashMap<>();
         status.put("httpServerAvailable", httpServerAvailable.get());
@@ -103,7 +108,7 @@ public class SoundService {
 
     @SuppressWarnings("unchecked")
     public SoundEvent analyzeAudio(String audioFilePath) {
-        if (!httpServerAvailable.get()) {
+        if (!refreshHttpServerAvailability()) {
             log.error("HTTP server not available, cannot analyze audio");
             return null;
         }
@@ -232,7 +237,7 @@ public class SoundService {
 
     public boolean startMonitoring() {
         log.info("[SoundService] 启动实时监测模式");
-        if (!httpServerAvailable.get()) {
+        if (!refreshHttpServerAvailability()) {
             log.error("HTTP server not available");
             return false;
         }
@@ -280,6 +285,12 @@ public class SoundService {
     public boolean stopMonitoring() {
         log.info("[SoundService] 停止实时监测模式");
 
+        if (!refreshHttpServerAvailability()) {
+            log.error("[SoundService] HTTP server not available, cannot stop realtime monitoring");
+            monitoringEnabled.set(false);
+            return false;
+        }
+
         HttpURLConnection conn = null;
         try {
             URL url = new URL(String.format("http://%s:%d/realtime/stop", soundServerHost, soundServerPort));
@@ -317,6 +328,7 @@ public class SoundService {
      */
     public Map<String, Object> getRealtimeStatus() {
         Map<String, Object> status = new HashMap<>();
+        refreshHttpServerAvailability();
 
         HttpURLConnection conn = null;
         try {
@@ -327,6 +339,7 @@ public class SoundService {
 
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
+                httpServerAvailable.set(true);
                 String response = readConnectionBody(conn);
                 com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
                 Map<String, Object> result = mapper.readValue(response, Map.class);
@@ -337,10 +350,12 @@ public class SoundService {
                     monitoringEnabled.set(runningFlag);
                 }
             } else {
+                httpServerAvailable.set(false);
                 status.put("success", false);
                 status.put("error", "获取状态失败");
             }
         } catch (Exception e) {
+            httpServerAvailable.set(false);
             status.put("success", false);
             status.put("error", e.getMessage());
         } finally {
@@ -356,6 +371,11 @@ public class SoundService {
      */
     public Map<String, Object> getRealtimeEvents() {
         Map<String, Object> result = new HashMap<>();
+        if (!refreshHttpServerAvailability()) {
+            result.put("success", false);
+            result.put("error", "声音服务不可用");
+            return result;
+        }
 
         HttpURLConnection conn = null;
         try {
@@ -366,6 +386,7 @@ public class SoundService {
 
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
+                httpServerAvailable.set(true);
                 String response = readConnectionBody(conn);
                 com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
                 Map<String, Object> eventsResult = mapper.readValue(response, Map.class);
@@ -373,10 +394,12 @@ public class SoundService {
                 result.put("count", eventsResult.get("count"));
                 result.put("success", true);
             } else {
+                httpServerAvailable.set(false);
                 result.put("success", false);
                 result.put("error", "获取事件失败");
             }
         } catch (Exception e) {
+            httpServerAvailable.set(false);
             result.put("success", false);
             result.put("error", e.getMessage());
         } finally {
@@ -393,6 +416,11 @@ public class SoundService {
     public Map<String, Object> getRealtimeWindows(int limit) {
         Map<String, Object> result = new HashMap<>();
         int normalizedLimit = Math.max(1, Math.min(limit, 50));
+        if (!refreshHttpServerAvailability()) {
+            result.put("success", false);
+            result.put("error", "声音服务不可用");
+            return result;
+        }
 
         HttpURLConnection conn = null;
         try {
@@ -405,16 +433,19 @@ public class SoundService {
 
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
+                httpServerAvailable.set(true);
                 String response = readConnectionBody(conn);
                 com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
                 Map<String, Object> windowsResult = mapper.readValue(response, Map.class);
                 result.putAll(windowsResult);
                 result.put("success", true);
             } else {
+                httpServerAvailable.set(false);
                 result.put("success", false);
                 result.put("error", "获取实时窗口状态失败");
             }
         } catch (Exception e) {
+            httpServerAvailable.set(false);
             result.put("success", false);
             result.put("error", e.getMessage());
         } finally {
@@ -483,9 +514,11 @@ public class SoundService {
 
             int responseCode = conn.getResponseCode();
             if (responseCode != 200) {
+                httpServerAvailable.set(false);
                 return;
             }
 
+            httpServerAvailable.set(true);
             String response = readConnectionBody(conn);
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             Map<String, Object> result = mapper.readValue(response, Map.class);
@@ -494,6 +527,7 @@ public class SoundService {
                 monitoringEnabled.set(runningFlag);
             }
         } catch (Exception e) {
+            httpServerAvailable.set(false);
             log.debug("[SoundService] 同步实时状态失败: {}", e.getMessage());
         } finally {
             if (conn != null) {

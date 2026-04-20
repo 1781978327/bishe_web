@@ -1,0 +1,27 @@
+# Sound_Monitoring realtime audio defaults
+# This file is loaded by rknn_yamnet_demo_http at startup.
+
+realtime:
+  device: "parec"
+  fallback_device: "parec:alsa_input.usb-Web_Camera_Web_Camera_202409021440-02.mono-fallback.2"
+  auto_start: true
+  print_asr: true
+  print_window: true
+  capture_volume: 1.0
+
+  mixer:
+    enabled: false
+    card: "5"
+    control: "Mic"
+    volume: "60%"
+
+  filter:
+    ffmpeg:
+      enabled: false
+      bin: "ffmpeg"
+      audio_filter: "afftdn=nf=-40,highpass=f=100,lowpass=f=3500,volume=6.0"
+    sox:
+      enabled: false
+      bin: "sox"
+      profile: ""
+      amount: 0.25

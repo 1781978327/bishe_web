@@ -20,15 +20,15 @@
  *                             Body (raw):       原始音频二进制数据
  *                             Response: {"success": true, "events": [...], "saved": true/false}
  *
- *   POST /realtime/start     - 启动实时麦克风监测 (默认第二个摄像头麦克风)
- *                             Body: {"device": "plughw:CARD=Camera_1,DEV=0"} (可选)
+ *   POST /realtime/start     - 启动实时麦克风监测
+ *                             Body: {"device": "parec"} (可选)
  *                             Response: {"success": true, "message": "started"}
  *
  *   POST /realtime/stop     - 停止实时监测
  *                             Response: {"success": true, "message": "stopped"}
  *
  *   GET  /realtime/status   - 查询实时监测状态
- *                             Response: {"running": true, "device": "plughw:4,0"}
+ *                             Response: {"running": true, "device": "parec"}
  *
  *   GET  /realtime/events   - 获取累积的异常事件
  *                             Response: {"events": [...], "count": N}
@@ -69,6 +69,7 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <errno.h>
+#include <fstream>
 #include <vector>
 #include <algorithm>
 #include <sstream>
@@ -119,6 +120,7 @@ static pthread_mutex_t g_asr_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int g_rt_transcript_dump_idx = 0;
 static int g_rt_print_asr = 1;
 static int g_rt_print_window = 1;
+static int g_auto_start_realtime = 1;
 
 // ========== 配置 ==========
 typedef struct {
@@ -137,17 +139,22 @@ static float g_sox_denoise_amount = 0.25f;
 static char g_sox_bin[256] = "sox";
 static char g_sox_denoise_profile[512] = {0};
 static float g_rt_capture_volume = 1.0f;
-static int g_rt_amixer_enabled = 1;
-static char g_rt_amixer_card[32] = "1";
+static int g_rt_amixer_enabled = 0;
+static char g_rt_amixer_card[32] = "5";
 static char g_rt_amixer_control[64] = "Mic";
-static char g_rt_amixer_volume[32] = "80%";
+static char g_rt_amixer_volume[32] = "60%";
+static int g_rt_ffmpeg_filter_enabled = 0;
+static char g_rt_ffmpeg_bin[256] = "ffmpeg";
+static char g_rt_ffmpeg_audio_filter[512] =
+    "afftdn=nf=-40,highpass=f=100,lowpass=f=3500,volume=6.0";
+static char g_runtime_audio_config_path[512] = {0};
 
 // ========== 实时监测状态 ==========
 #define RT_RING_BUFFER_SEC 120
 #define RT_TRANSCRIPT_MAX_SEC 120
 #define RT_TRANSCRIPT_DEFAULT_SEC 120
-#define DEFAULT_RT_DEVICE "plughw:CARD=Camera_1,DEV=0"
-#define FALLBACK_RT_DEVICE "plughw:CARD=Camera,DEV=0"
+#define DEFAULT_RT_DEVICE "parec"
+#define FALLBACK_RT_DEVICE "parec:alsa_input.usb-Web_Camera_Web_Camera_202409021440-02.mono-fallback.2"
 #define RT_CHUNK_DURATION_SEC 3
 #define RT_HOP_SEC 1.5
 #define RT_DETECTION_THRESHOLD 0.05
@@ -158,6 +165,9 @@ static char g_rt_amixer_volume[32] = "80%";
 #define RT_MAX_KEYWORDS 10
 #define RT_EVENT_QUEUE_SIZE 50
 #define RT_WINDOW_QUEUE_SIZE 50
+
+static char g_rt_default_device[256] = DEFAULT_RT_DEVICE;
+static char g_rt_fallback_device[256] = FALLBACK_RT_DEVICE;
 
 typedef struct {
     int event_id;
@@ -224,7 +234,7 @@ typedef struct {
 
 static RingBuffer rt_ring = {0};
 static audio_capture_t *rt_cap = NULL;
-static char rt_device[64] = DEFAULT_RT_DEVICE;
+static char rt_device[256] = DEFAULT_RT_DEVICE;
 static int rt_sample_rate = 16000;
 
 // 实时线程本地数据（避免全局混乱）
@@ -241,7 +251,19 @@ static void json_escape_string(const char* input, char* output, size_t output_si
 static AsrResult run_asr_locked(const float *data, int num_frames);
 static int should_log_http_request(const char *method, const char *path);
 static std::string summarize_top_results(const ResultEntry *results, int result_count, int max_items);
+static void init_runtime_audio_yaml_config();
 static void apply_rt_capture_mixer();
+static void init_rt_ffmpeg_filter_config();
+static int ffmpeg_rt_filter_is_ready();
+static int ffmpeg_filter_wav_inplace(const char *wav_path,
+                                     int sample_rate,
+                                     int num_channels,
+                                     const char *context);
+static int ffmpeg_filter_buffer_inplace(float *data,
+                                        int num_frames,
+                                        int sample_rate,
+                                        int num_channels,
+                                        const char *context);
 static int sox_denoise_is_ready();
 static int sox_denoise_wav_inplace(const char *wav_path, const char *context);
 static int sox_denoise_buffer_inplace(float *data,
@@ -446,7 +468,13 @@ static void rt_push_event(float start_sec, float end_sec, float max_score) {
                           g_event_audio.frames, rt_sample_rate, 1);
         duration = (float)g_event_audio.frames / rt_sample_rate;
         if (saved == 0) {
-            (void)sox_denoise_wav_inplace(audio_path, "realtime-event");
+            int ffmpeg_ok = 0;
+            if (ffmpeg_rt_filter_is_ready()) {
+                ffmpeg_ok = (ffmpeg_filter_wav_inplace(audio_path, rt_sample_rate, 1, "realtime-event") == 0);
+            }
+            if (!ffmpeg_ok) {
+                (void)sox_denoise_wav_inplace(audio_path, "realtime-event");
+            }
             printf("[RT] Audio saved: %s (%d frames, %.1fs)\n",
                    audio_path, g_event_audio.frames, duration);
         }
@@ -659,9 +687,14 @@ static void *rt_monitor_thread(void *arg) {
 
             float chunk_data[frames_per_chunk];
             rt_ring_get_latest(&rt_ring, chunk_data, frames_per_chunk);
-            if (sox_denoise_is_ready()) {
+            int ffmpeg_ok = 0;
+            if (ffmpeg_rt_filter_is_ready()) {
+                ffmpeg_ok = (ffmpeg_filter_buffer_inplace(chunk_data, frames_per_chunk, rt_sample_rate, 1,
+                                                          "realtime-window") == 0);
+            }
+            if (!ffmpeg_ok && sox_denoise_is_ready()) {
                 (void)sox_denoise_buffer_inplace(chunk_data, frames_per_chunk, rt_sample_rate, 1,
-                                                 "realtime-window");
+                                                 "realtime-window-fallback-sox");
             }
 
             audio_buffer_t audio;
@@ -787,12 +820,15 @@ static int rt_start(const char *device) {
 
     apply_rt_capture_mixer();
 
-    // 打开音频设备。优先使用第二个摄像头，失败则尝试第一个摄像头。
+    // 打开音频设备。默认走 parec，也就是 Pulse 当前默认麦克风。
     rt_cap = capture_open(rt_device, rt_sample_rate, 1, 60);
-    if (!rt_cap && strcmp(rt_device, DEFAULT_RT_DEVICE) == 0) {
+    if (!rt_cap &&
+        strcmp(rt_device, g_rt_default_device) == 0 &&
+        g_rt_fallback_device[0] != '\0' &&
+        strcmp(g_rt_fallback_device, g_rt_default_device) != 0) {
         printf("[RT WARN] Failed to open preferred device %s, fallback to %s\n",
-               DEFAULT_RT_DEVICE, FALLBACK_RT_DEVICE);
-        strncpy(rt_device, FALLBACK_RT_DEVICE, sizeof(rt_device) - 1);
+               g_rt_default_device, g_rt_fallback_device);
+        strncpy(rt_device, g_rt_fallback_device, sizeof(rt_device) - 1);
         rt_device[sizeof(rt_device) - 1] = '\0';
         rt_cap = capture_open(rt_device, rt_sample_rate, 1, 60);
     }
@@ -942,6 +978,215 @@ static int parse_bool_text_local(const char *value, int default_value) {
     return default_value;
 }
 
+static std::string trim_copy(const std::string &value) {
+    size_t start = value.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    size_t end = value.find_last_not_of(" \t\r\n");
+    return value.substr(start, end - start + 1);
+}
+
+static std::string strip_yaml_comment(const std::string &line) {
+    bool in_single = false;
+    bool in_double = false;
+
+    for (size_t i = 0; i < line.size(); ++i) {
+        char c = line[i];
+        if (c == '"' && !in_single) {
+            in_double = !in_double;
+            continue;
+        }
+        if (c == '\'' && !in_double) {
+            in_single = !in_single;
+            continue;
+        }
+        if (c == '#' && !in_single && !in_double) {
+            return trim_copy(line.substr(0, i));
+        }
+    }
+    return trim_copy(line);
+}
+
+static std::string unquote_yaml_value(const std::string &value) {
+    std::string trimmed = trim_copy(value);
+    if (trimmed == "null" || trimmed == "~") return "";
+    if (trimmed.size() >= 2) {
+        char first = trimmed.front();
+        char last = trimmed.back();
+        if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+            return trimmed.substr(1, trimmed.size() - 2);
+        }
+    }
+    return trimmed;
+}
+
+static void copy_string_value(char *dest, size_t dest_size, const std::string &value) {
+    if (!dest || dest_size == 0) return;
+    strncpy(dest, value.c_str(), dest_size - 1);
+    dest[dest_size - 1] = '\0';
+}
+
+static void apply_runtime_audio_yaml_value(const std::string &key_path, const std::string &raw_value) {
+    std::string value = unquote_yaml_value(raw_value);
+
+    if (key_path == "realtime.device") {
+        copy_string_value(g_rt_default_device, sizeof(g_rt_default_device), value);
+    } else if (key_path == "realtime.fallback_device") {
+        copy_string_value(g_rt_fallback_device, sizeof(g_rt_fallback_device), value);
+    } else if (key_path == "realtime.auto_start") {
+        g_auto_start_realtime = parse_bool_text_local(value.c_str(), g_auto_start_realtime);
+    } else if (key_path == "realtime.print_asr") {
+        g_rt_print_asr = parse_bool_text_local(value.c_str(), g_rt_print_asr);
+    } else if (key_path == "realtime.print_window") {
+        g_rt_print_window = parse_bool_text_local(value.c_str(), g_rt_print_window);
+    } else if (key_path == "realtime.capture_volume") {
+        float capture_volume = (float)atof(value.c_str());
+        if (capture_volume > 2.0f && capture_volume <= 200.0f) {
+            capture_volume /= 100.0f;
+        }
+        if (capture_volume >= 0.0f && capture_volume <= 2.0f) {
+            g_rt_capture_volume = capture_volume;
+        }
+    } else if (key_path == "realtime.mixer.enabled") {
+        g_rt_amixer_enabled = parse_bool_text_local(value.c_str(), g_rt_amixer_enabled);
+    } else if (key_path == "realtime.mixer.card") {
+        copy_string_value(g_rt_amixer_card, sizeof(g_rt_amixer_card), value);
+    } else if (key_path == "realtime.mixer.control") {
+        copy_string_value(g_rt_amixer_control, sizeof(g_rt_amixer_control), value);
+    } else if (key_path == "realtime.mixer.volume") {
+        copy_string_value(g_rt_amixer_volume, sizeof(g_rt_amixer_volume), value);
+    } else if (key_path == "realtime.filter.ffmpeg.enabled") {
+        g_rt_ffmpeg_filter_enabled = parse_bool_text_local(value.c_str(), g_rt_ffmpeg_filter_enabled);
+    } else if (key_path == "realtime.filter.ffmpeg.bin") {
+        copy_string_value(g_rt_ffmpeg_bin, sizeof(g_rt_ffmpeg_bin), value);
+    } else if (key_path == "realtime.filter.ffmpeg.audio_filter") {
+        copy_string_value(g_rt_ffmpeg_audio_filter, sizeof(g_rt_ffmpeg_audio_filter), value);
+    } else if (key_path == "realtime.filter.sox.enabled") {
+        g_sox_denoise_enabled = parse_bool_text_local(value.c_str(), g_sox_denoise_enabled);
+    } else if (key_path == "realtime.filter.sox.bin") {
+        copy_string_value(g_sox_bin, sizeof(g_sox_bin), value);
+    } else if (key_path == "realtime.filter.sox.profile") {
+        copy_string_value(g_sox_denoise_profile, sizeof(g_sox_denoise_profile), value);
+    } else if (key_path == "realtime.filter.sox.amount") {
+        float sox_amount = (float)atof(value.c_str());
+        if (sox_amount > 0.0f && sox_amount <= 1.0f) {
+            g_sox_denoise_amount = sox_amount;
+        }
+    }
+}
+
+static int resolve_runtime_audio_config_path(char *path_out, size_t path_size) {
+    if (!path_out || path_size == 0) return -1;
+
+    const char *env_path = getenv("SOUND_MONITORING_CONFIG");
+    const char *candidates[] = {
+        "./config/runtime_audio.yaml",
+        "../config/runtime_audio.yaml",
+        "../../config/runtime_audio.yaml",
+        NULL
+    };
+
+    if (env_path && env_path[0]) {
+        std::ifstream env_file(env_path);
+        if (env_file.good()) {
+            copy_string_value(path_out, path_size, env_path);
+            return 0;
+        }
+        printf("[CONFIG] SOUND_MONITORING_CONFIG not found: %s\n", env_path);
+    }
+
+    for (int i = 0; candidates[i] != NULL; ++i) {
+        const char *candidate = candidates[i];
+        std::ifstream candidate_file(candidate);
+        if (candidate_file.good()) {
+            copy_string_value(path_out, path_size, candidate);
+            return 0;
+        }
+    }
+
+    path_out[0] = '\0';
+    return -1;
+}
+
+static void init_runtime_audio_yaml_config() {
+    char config_path[512] = {0};
+    if (resolve_runtime_audio_config_path(config_path, sizeof(config_path)) != 0) {
+        printf("[CONFIG] runtime_audio.yaml not found, use built-in defaults\n");
+        return;
+    }
+
+    std::ifstream in(config_path);
+    if (!in.is_open()) {
+        printf("[CONFIG] failed to open runtime audio config: %s\n", config_path);
+        return;
+    }
+
+    copy_string_value(g_runtime_audio_config_path, sizeof(g_runtime_audio_config_path), config_path);
+
+    std::vector<std::string> sections;
+    std::string raw_line;
+    while (std::getline(in, raw_line)) {
+        std::string line = strip_yaml_comment(raw_line);
+        if (line.empty()) continue;
+
+        size_t non_space = raw_line.find_first_not_of(" \t");
+        if (non_space == std::string::npos) continue;
+
+        int indent = 0;
+        for (size_t i = 0; i < raw_line.size(); ++i) {
+            if (raw_line[i] == ' ') {
+                indent += 1;
+            } else if (raw_line[i] == '\t') {
+                indent += 2;
+            } else {
+                break;
+            }
+        }
+
+        std::string working = raw_line.substr(non_space);
+        working = strip_yaml_comment(working);
+        if (working.empty() || working[0] == '-') continue;
+
+        size_t colon = working.find(':');
+        if (colon == std::string::npos) continue;
+
+        std::string key = trim_copy(working.substr(0, colon));
+        std::string value = trim_copy(working.substr(colon + 1));
+        int level = indent / 2;
+
+        if ((int)sections.size() > level) {
+            sections.resize(level);
+        }
+
+        if (value.empty()) {
+            if ((int)sections.size() == level) {
+                sections.push_back(key);
+            } else if ((int)sections.size() > level) {
+                sections[level] = key;
+            }
+            continue;
+        }
+
+        std::string key_path;
+        for (size_t i = 0; i < sections.size(); ++i) {
+            if (sections[i].empty()) continue;
+            if (!key_path.empty()) key_path += ".";
+            key_path += sections[i];
+        }
+        if (!key_path.empty()) key_path += ".";
+        key_path += key;
+
+        apply_runtime_audio_yaml_value(key_path, value);
+    }
+
+    copy_string_value(rt_device, sizeof(rt_device), g_rt_default_device);
+    printf("[CONFIG] loaded runtime audio config: %s\n", g_runtime_audio_config_path);
+    printf("[CONFIG] realtime defaults: device=%s, mixer=%s, ffmpeg=%s, sox=%s\n",
+           g_rt_default_device,
+           g_rt_amixer_enabled ? "on" : "off",
+           g_rt_ffmpeg_filter_enabled ? "on" : "off",
+           g_sox_denoise_enabled ? "on" : "off");
+}
+
 static std::string shell_quote_single(const char *input) {
     std::string out = "'";
     if (input) {
@@ -963,7 +1208,7 @@ static void init_rt_capture_mixer_config() {
     const char *env_control = getenv("RT_AMIXER_CONTROL");
     const char *env_volume = getenv("RT_AMIXER_VOLUME");
 
-    g_rt_amixer_enabled = parse_bool_text_local(env_enabled, 1);
+    g_rt_amixer_enabled = parse_bool_text_local(env_enabled, g_rt_amixer_enabled);
     if (!g_rt_amixer_enabled) {
         printf("[RT] Hardware amixer setup disabled by RT_AMIXER_ENABLED=%s\n",
                env_enabled ? env_enabled : "0");
@@ -1031,6 +1276,160 @@ static int create_temp_wav_path(const char *prefix, char *path_out, size_t path_
     strncpy(path_out, tmpl, path_size - 1);
     path_out[path_size - 1] = '\0';
     return 0;
+}
+
+static int ffmpeg_rt_filter_is_ready() {
+    return g_rt_ffmpeg_filter_enabled && g_rt_ffmpeg_audio_filter[0] != '\0';
+}
+
+static int ffmpeg_filter_wav_to_path(const char *input_wav,
+                                     const char *output_wav,
+                                     int sample_rate,
+                                     int num_channels,
+                                     const char *context) {
+    if (!ffmpeg_rt_filter_is_ready()) return -1;
+    if (!input_wav || !output_wav || sample_rate <= 0 || num_channels <= 0) return -1;
+
+    std::ostringstream cmd;
+    cmd << shell_quote_single(g_rt_ffmpeg_bin)
+        << " -y -hide_banner -loglevel error"
+        << " -i " << shell_quote_single(input_wav)
+        << " -af " << shell_quote_single(g_rt_ffmpeg_audio_filter)
+        << " -ar " << sample_rate
+        << " -ac " << num_channels
+        << " -c:a pcm_s16le "
+        << shell_quote_single(output_wav)
+        << " >/dev/null 2>&1";
+
+    int ret = system(cmd.str().c_str());
+    if (ret != 0) {
+        printf("[DENOISE] FFmpeg 失败: context=%s, in=%s, out=%s, af=%s, ret=%d\n",
+               context ? context : "unknown",
+               input_wav,
+               output_wav,
+               g_rt_ffmpeg_audio_filter,
+               ret);
+        return -1;
+    }
+    return 0;
+}
+
+static int ffmpeg_filter_wav_to_temp(const char *input_wav,
+                                     char *output_wav,
+                                     size_t output_size,
+                                     int sample_rate,
+                                     int num_channels,
+                                     const char *context) {
+    if (!ffmpeg_rt_filter_is_ready()) return -1;
+    if (create_temp_wav_path("yamnet_ffmpeg_out", output_wav, output_size) != 0) {
+        printf("[DENOISE] FFmpeg 创建临时输出文件失败: context=%s\n",
+               context ? context : "unknown");
+        return -1;
+    }
+
+    if (ffmpeg_filter_wav_to_path(input_wav, output_wav, sample_rate, num_channels, context) != 0) {
+        unlink(output_wav);
+        output_wav[0] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
+static int ffmpeg_filter_wav_inplace(const char *wav_path,
+                                     int sample_rate,
+                                     int num_channels,
+                                     const char *context) {
+    if (!ffmpeg_rt_filter_is_ready()) return -1;
+    if (!wav_path || wav_path[0] == '\0') return -1;
+
+    char filtered_path[512] = {0};
+    if (ffmpeg_filter_wav_to_temp(wav_path, filtered_path, sizeof(filtered_path),
+                                  sample_rate, num_channels, context) != 0) {
+        return -1;
+    }
+
+    if (rename(filtered_path, wav_path) != 0) {
+        printf("[DENOISE] FFmpeg 覆盖目标文件失败: context=%s, target=%s, err=%s\n",
+               context ? context : "unknown", wav_path, strerror(errno));
+        unlink(filtered_path);
+        return -1;
+    }
+    return 0;
+}
+
+static int ffmpeg_filter_buffer_inplace(float *data,
+                                        int num_frames,
+                                        int sample_rate,
+                                        int num_channels,
+                                        const char *context) {
+    if (!ffmpeg_rt_filter_is_ready()) return 0;
+    if (!data || num_frames <= 0 || sample_rate <= 0 || num_channels <= 0) return -1;
+
+    char input_wav[512] = {0};
+    char output_wav[512] = {0};
+    audio_buffer_t filtered_audio;
+    memset(&filtered_audio, 0, sizeof(filtered_audio));
+    int ret = -1;
+
+    if (create_temp_wav_path("yamnet_ffmpeg_in", input_wav, sizeof(input_wav)) != 0) {
+        printf("[DENOISE] FFmpeg 创建临时输入文件失败: context=%s\n",
+               context ? context : "unknown");
+        goto cleanup;
+    }
+
+    if (save_audio(input_wav, data, num_frames, sample_rate, num_channels) != 0) {
+        printf("[DENOISE] FFmpeg 写入临时 wav 失败: context=%s\n",
+               context ? context : "unknown");
+        goto cleanup;
+    }
+
+    if (ffmpeg_filter_wav_to_temp(input_wav, output_wav, sizeof(output_wav),
+                                  sample_rate, num_channels, context) != 0) {
+        goto cleanup;
+    }
+
+    if (read_audio(output_wav, &filtered_audio) != 0) {
+        printf("[DENOISE] FFmpeg 读取处理结果失败: context=%s\n",
+               context ? context : "unknown");
+        goto cleanup;
+    }
+
+    if (filtered_audio.num_channels != num_channels) {
+        if (num_channels == 1 && filtered_audio.num_channels == 2) {
+            if (convert_channels(&filtered_audio) != 0) {
+                printf("[DENOISE] FFmpeg 声道转换失败: context=%s\n",
+                       context ? context : "unknown");
+                goto cleanup;
+            }
+        } else {
+            printf("[DENOISE] FFmpeg 声道数不匹配: context=%s, expected=%d, got=%d\n",
+                   context ? context : "unknown", num_channels, filtered_audio.num_channels);
+            goto cleanup;
+        }
+    }
+
+    if (filtered_audio.sample_rate != sample_rate) {
+        if (resample_audio(&filtered_audio, filtered_audio.sample_rate, sample_rate) != 0) {
+            printf("[DENOISE] FFmpeg 重采样失败: context=%s, expected=%d, got=%d\n",
+                   context ? context : "unknown", sample_rate, filtered_audio.sample_rate);
+            goto cleanup;
+        }
+    }
+
+    {
+        int copy_frames = std::min(num_frames, filtered_audio.num_frames);
+        memcpy(data, filtered_audio.data, copy_frames * sizeof(float));
+        if (copy_frames < num_frames) {
+            memset(data + copy_frames, 0, (num_frames - copy_frames) * sizeof(float));
+        }
+    }
+    ret = 0;
+
+cleanup:
+    if (filtered_audio.data) free(filtered_audio.data);
+    if (input_wav[0]) unlink(input_wav);
+    if (output_wav[0]) unlink(output_wav);
+    return ret;
 }
 
 static int sox_denoise_is_ready() {
@@ -1173,6 +1572,46 @@ cleanup:
     return ret;
 }
 
+static void init_rt_ffmpeg_filter_config() {
+    const char *env_enabled = getenv("RT_FFMPEG_FILTER_ENABLED");
+    const char *env_bin = getenv("RT_FFMPEG_BIN");
+    const char *env_filter = getenv("RT_FFMPEG_AUDIO_FILTER");
+
+    if (env_bin && env_bin[0]) {
+        strncpy(g_rt_ffmpeg_bin, env_bin, sizeof(g_rt_ffmpeg_bin) - 1);
+        g_rt_ffmpeg_bin[sizeof(g_rt_ffmpeg_bin) - 1] = '\0';
+    }
+
+    if (env_filter && env_filter[0]) {
+        strncpy(g_rt_ffmpeg_audio_filter, env_filter, sizeof(g_rt_ffmpeg_audio_filter) - 1);
+        g_rt_ffmpeg_audio_filter[sizeof(g_rt_ffmpeg_audio_filter) - 1] = '\0';
+    }
+
+    g_rt_ffmpeg_filter_enabled = parse_bool_text_local(env_enabled, g_rt_ffmpeg_filter_enabled);
+    if (!g_rt_ffmpeg_filter_enabled) {
+        printf("[DENOISE] FFmpeg 实时滤波已禁用 (RT_FFMPEG_FILTER_ENABLED=%s)\n",
+               env_enabled ? env_enabled : "0");
+        return;
+    }
+
+    if (g_rt_ffmpeg_audio_filter[0] == '\0') {
+        g_rt_ffmpeg_filter_enabled = 0;
+        printf("[DENOISE] FFmpeg 实时滤波未配置 audio filter，保持关闭\n");
+        return;
+    }
+
+    std::ostringstream probe_cmd;
+    probe_cmd << "command -v " << shell_quote_single(g_rt_ffmpeg_bin) << " >/dev/null 2>&1";
+    if (system(probe_cmd.str().c_str()) != 0) {
+        g_rt_ffmpeg_filter_enabled = 0;
+        printf("[DENOISE] 未找到 FFmpeg 可执行文件: %s\n", g_rt_ffmpeg_bin);
+        return;
+    }
+
+    printf("[DENOISE] FFmpeg 实时滤波已启用: bin=%s, af=%s\n",
+           g_rt_ffmpeg_bin, g_rt_ffmpeg_audio_filter);
+}
+
 static void init_sox_denoise_config() {
     const char *env_enabled = getenv("SOX_DENOISE_ENABLED");
     const char *env_bin = getenv("SOX_BIN");
@@ -1191,7 +1630,7 @@ static void init_sox_denoise_config() {
         }
     }
 
-    int enabled = parse_bool_text_local(env_enabled, 1);
+    int enabled = parse_bool_text_local(env_enabled, g_sox_denoise_enabled);
     if (!enabled) {
         g_sox_denoise_enabled = 0;
         printf("[DENOISE] SoX 降噪已禁用 (SOX_DENOISE_ENABLED=%s)\n",
@@ -1202,6 +1641,8 @@ static void init_sox_denoise_config() {
     if (env_profile && env_profile[0] && path_exists(env_profile)) {
         strncpy(g_sox_denoise_profile, env_profile, sizeof(g_sox_denoise_profile) - 1);
         g_sox_denoise_profile[sizeof(g_sox_denoise_profile) - 1] = '\0';
+    } else if (g_sox_denoise_profile[0] != '\0' && path_exists(g_sox_denoise_profile)) {
+        // Keep YAML/default configured profile.
     } else {
         const char *candidates[] = {
             "../../../speech_camera2_80.prof",
@@ -1966,7 +2407,9 @@ void handle_health(int client_fd) {
 }
 
 void handle_realtime_start(int client_fd, const char *body) {
-    char device[64] = DEFAULT_RT_DEVICE;
+    char device[256];
+    strncpy(device, g_rt_default_device, sizeof(device) - 1);
+    device[sizeof(device) - 1] = '\0';
 
     // 解析 device 参数（可选）
     const char *dev_ptr = strstr(body, "\"device\"");
@@ -1975,7 +2418,7 @@ void handle_realtime_start(int client_fd, const char *body) {
         while (*dev_ptr == ' ' || *dev_ptr == ':') dev_ptr++;
         if (*dev_ptr == '"') dev_ptr++;
         int i = 0;
-        while (*dev_ptr && *dev_ptr != '"' && *dev_ptr != '\n' && i < 63) {
+        while (*dev_ptr && *dev_ptr != '"' && *dev_ptr != '\n' && i < (int)sizeof(device) - 1) {
             device[i++] = *dev_ptr++;
         }
         device[i] = '\0';
@@ -1987,7 +2430,7 @@ void handle_realtime_start(int client_fd, const char *body) {
     char result[512];
     if (ret == 0) {
         pthread_mutex_lock(&rt_mutex);
-        char actual_device[64];
+        char actual_device[256];
         strncpy(actual_device, rt_device, sizeof(actual_device) - 1);
         actual_device[sizeof(actual_device) - 1] = '\0';
         pthread_mutex_unlock(&rt_mutex);
@@ -2017,20 +2460,30 @@ void handle_realtime_stop(int client_fd) {
 void handle_realtime_status(int client_fd) {
     pthread_mutex_lock(&rt_mutex);
     int running = rt_active;
-    char device[64];
+    char device[256];
     strncpy(device, rt_device, sizeof(device) - 1);
+    device[sizeof(device) - 1] = '\0';
     pthread_mutex_unlock(&rt_mutex);
 
-    char result[512];
+    char escaped_ffmpeg_bin[512] = {0};
+    char escaped_ffmpeg_filter[1024] = {0};
+    json_escape_string(g_rt_ffmpeg_bin, escaped_ffmpeg_bin, sizeof(escaped_ffmpeg_bin));
+    json_escape_string(g_rt_ffmpeg_audio_filter, escaped_ffmpeg_filter, sizeof(escaped_ffmpeg_filter));
+
+    char result[2048];
     snprintf(result, sizeof(result),
         "{\"running\": %s, \"device\": \"%s\", \"sample_rate\": %d, "
         "\"capture_volume\": %.2f, \"mixer_enabled\": %s, \"mixer_card\": \"%s\", "
-        "\"mixer_control\": \"%s\", \"mixer_volume\": \"%s\"}",
+        "\"mixer_control\": \"%s\", \"mixer_volume\": \"%s\", "
+        "\"ffmpeg_filter_enabled\": %s, \"ffmpeg_bin\": \"%s\", \"ffmpeg_audio_filter\": \"%s\"}",
         running ? "true" : "false", device, rt_sample_rate, g_rt_capture_volume,
         g_rt_amixer_enabled ? "true" : "false",
         g_rt_amixer_card,
         g_rt_amixer_control,
-        g_rt_amixer_volume);
+        g_rt_amixer_volume,
+        ffmpeg_rt_filter_is_ready() ? "true" : "false",
+        escaped_ffmpeg_bin,
+        escaped_ffmpeg_filter);
     send_response(client_fd, "200 OK", "application/json", result, strlen(result));
 }
 
@@ -2275,12 +2728,24 @@ void handle_realtime_transcript(int client_fd, const char *query) {
 }
 
 void handle_config(int client_fd) {
-    char body[4096];
+    char escaped_ffmpeg_bin[512] = {0};
+    char escaped_ffmpeg_filter[1024] = {0};
+    char escaped_config_path[1024] = {0};
+    char escaped_default_device[512] = {0};
+    json_escape_string(g_rt_ffmpeg_bin, escaped_ffmpeg_bin, sizeof(escaped_ffmpeg_bin));
+    json_escape_string(g_rt_ffmpeg_audio_filter, escaped_ffmpeg_filter, sizeof(escaped_ffmpeg_filter));
+    json_escape_string(g_runtime_audio_config_path, escaped_config_path, sizeof(escaped_config_path));
+    json_escape_string(g_rt_default_device, escaped_default_device, sizeof(escaped_default_device));
+
+    char body[6144];
     snprintf(body, sizeof(body),
         "{\"model_path\": \"%s\", \"anomaly_threshold\": %.2f, \"save_anomaly\": %d, "
         "\"keywords_count\": %d, \"asr_enabled\": %s, \"asr_model_cn\": \"%s\", \"asr_model_en\": \"%s\", "
+        "\"runtime_audio_config_path\": \"%s\", \"rt_default_device\": \"%s\", "
         "\"sox_denoise_enabled\": %s, \"sox_bin\": \"%s\", \"sox_denoise_profile\": \"%s\", "
-        "\"sox_denoise_amount\": %.2f, \"rt_capture_volume\": %.2f, "
+        "\"sox_denoise_amount\": %.2f, "
+        "\"rt_ffmpeg_filter_enabled\": %s, \"rt_ffmpeg_bin\": \"%s\", \"rt_ffmpeg_audio_filter\": \"%s\", "
+        "\"rt_capture_volume\": %.2f, "
         "\"rt_amixer_enabled\": %s, \"rt_amixer_card\": \"%s\", "
         "\"rt_amixer_control\": \"%s\", \"rt_amixer_volume\": \"%s\"}",
         model_path, config.anomaly_threshold, config.save_anomaly,
@@ -2288,10 +2753,15 @@ void handle_config(int client_fd) {
         g_asr_enabled ? "true" : "false",
         g_asr_model_cn,
         g_asr_model_en,
+        escaped_config_path,
+        escaped_default_device,
         sox_denoise_is_ready() ? "true" : "false",
         g_sox_bin,
         g_sox_denoise_profile,
         g_sox_denoise_amount,
+        ffmpeg_rt_filter_is_ready() ? "true" : "false",
+        escaped_ffmpeg_bin,
+        escaped_ffmpeg_filter,
         g_rt_capture_volume,
         g_rt_amixer_enabled ? "true" : "false",
         g_rt_amixer_card,
@@ -2541,13 +3011,16 @@ int main(int argc, char *argv[]) {
     const char *rt_print_window_env = getenv("RT_PRINT_WINDOW");
     const char *rt_capture_volume_env = getenv("RT_CAPTURE_VOLUME");
     const char *rt_capture_volume_percent_env = getenv("RT_CAPTURE_VOLUME_PERCENT");
-    int auto_start_realtime = 1;
+
+    init_runtime_audio_yaml_config();
 
     if (auto_rt_env && auto_rt_env[0]) {
         if (strcmp(auto_rt_env, "0") == 0 ||
             strcasecmp(auto_rt_env, "false") == 0 ||
             strcasecmp(auto_rt_env, "no") == 0) {
-            auto_start_realtime = 0;
+            g_auto_start_realtime = 0;
+        } else {
+            g_auto_start_realtime = 1;
         }
     }
 
@@ -2597,6 +3070,7 @@ int main(int argc, char *argv[]) {
     printf("======================================================================\n");
 
     init_rt_capture_mixer_config();
+    init_rt_ffmpeg_filter_config();
     init_sox_denoise_config();
 
     // 初始化模型
@@ -2611,8 +3085,8 @@ int main(int argc, char *argv[]) {
     }
 
     // 默认自动启动实时分类采集，使转写接口开箱即用。
-    if (auto_start_realtime) {
-        int rt_ret = rt_start(DEFAULT_RT_DEVICE);
+    if (g_auto_start_realtime) {
+        int rt_ret = rt_start(g_rt_default_device);
         if (rt_ret == 0) {
             printf("[OK] Realtime auto-start enabled, device=%s\n", rt_device);
         } else if (rt_ret == -1) {
@@ -2629,6 +3103,9 @@ int main(int argc, char *argv[]) {
     printf("  服务器启动成功！\n");
     printf("======================================================================\n");
     printf("  端口: %d\n", port);
+    printf("  音频配置文件: %s\n",
+           g_runtime_audio_config_path[0] ? g_runtime_audio_config_path : "(not found, using built-in defaults)");
+    printf("  默认实时输入: %s\n", g_rt_default_device);
     printf("  API:\n");
     printf("    POST /analyze           - 分析音频文件 (本地路径)\n");
     printf("    POST /analyze/upload    - 上传音频文件 (支持 MP3/WAV/OGG 等)\n");
@@ -2648,19 +3125,29 @@ int main(int argc, char *argv[]) {
     printf("    export VOSK_LIB_PATH=/path/to/libvosk.so   (可选)\n");
     printf("    export RT_PRINT_ASR=1   # 实时打印每3秒转写（默认开）\n");
     printf("    export RT_PRINT_WINDOW=1   # 实时打印每个3秒检测窗口（默认开）\n");
-    printf("    export RT_AMIXER_ENABLED=1\n");
-    printf("    export RT_AMIXER_CARD=1\n");
+    printf("    export RT_AMIXER_ENABLED=0\n");
+    printf("    export RT_AMIXER_CARD=5\n");
     printf("    export RT_AMIXER_CONTROL=Mic\n");
-    printf("    export RT_AMIXER_VOLUME=80%%\n");
+    printf("    export RT_AMIXER_VOLUME=60%%\n");
     printf("    export RT_CAPTURE_VOLUME=1.0   # 软件增益，默认不额外缩放\n");
+    printf("    export SOUND_MONITORING_CONFIG=/path/to/runtime_audio.yaml\n");
     printf("  SoX 降噪配置:\n");
     printf("    export SOX_DENOISE_ENABLED=1\n");
     printf("    export SOX_DENOISE_PROFILE=/path/to/speech_camera2_80.prof\n");
     printf("    export SOX_DENOISE_AMOUNT=0.25\n");
     printf("    export SOX_BIN=sox\n");
+    printf("  FFmpeg 实时滤波配置:\n");
+    printf("    export RT_FFMPEG_FILTER_ENABLED=1\n");
+    printf("    export RT_FFMPEG_BIN=ffmpeg\n");
+    printf("    export RT_FFMPEG_AUDIO_FILTER='afftdn=nf=-40,highpass=f=100,lowpass=f=3500,volume=6.0'\n");
     printf("  当前硬件麦克风设置: amixer -c %s sset %s %s\n",
            g_rt_amixer_card, g_rt_amixer_control, g_rt_amixer_volume);
     printf("  当前软件录音增益: %.2f (%.0f%%)\n", g_rt_capture_volume, g_rt_capture_volume * 100.0f);
+    printf("  当前默认实时输入: %s\n", g_rt_default_device);
+    printf("  当前实时 FFmpeg 滤波: %s (bin=%s, af=%s)\n",
+           ffmpeg_rt_filter_is_ready() ? "enabled" : "disabled",
+           g_rt_ffmpeg_bin,
+           g_rt_ffmpeg_audio_filter);
     printf("======================================================================\n");
     printf("  示例:\n");
     printf("    curl -X POST http://localhost:%d/analyze \\\n", port);
@@ -2673,7 +3160,7 @@ int main(int argc, char *argv[]) {
     printf("         --data-binary @test.mp3\n");
     printf("    curl -X POST http://localhost:%d/realtime/start \\\n", port);
     printf("         -H \"Content-Type: application/json\" \\\n");
-    printf("         -d '{\"device\": \"plughw:CARD=Camera_1,DEV=0\"}'\n");
+    printf("         -d '{\"device\": \"parec\"}'\n");
     printf("    curl http://localhost:%d/realtime/status\n", port);
     printf("    curl http://localhost:%d/realtime/events\n", port);
     printf("    curl http://localhost:%d/realtime/windows?limit=5\n", port);

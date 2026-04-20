@@ -11,7 +11,7 @@ export LD_LIBRARY_PATH="$BUILD_DIR/lib:$LD_LIBRARY_PATH"
 
 # 默认参数
 MODEL="${1:-model/yamnet音频.rknn}"
-DEVICE="${2:-hw:4,0}"
+DEVICE="${2:-parec}"
 
 echo "=========================================="
 echo "  YAMNet Sound Monitoring - Live"

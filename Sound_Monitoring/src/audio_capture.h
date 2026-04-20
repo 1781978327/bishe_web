@@ -1,7 +1,9 @@
 /**
- * audio_capture.h - Real-time audio capture from ALSA device
- * 
- * 支持从 USB 摄像头麦克风实时采集音频
+ * audio_capture.h - Real-time audio capture from ALSA / PulseAudio
+ *
+ * 支持两种实时采集方式：
+ *   1) ALSA 设备，如 "hw:4,0"、"plughw:CARD=Camera_1,DEV=0"
+ *   2) parec 设备，如 "parec"、"parec:alsa_input.xxx"
  */
 
 #ifndef AUDIO_CAPTURE_H
@@ -14,7 +16,7 @@ extern "C" {
 #include <stdint.h>
 
 typedef struct {
-    void *handle;              // ALSA PCM 句柄
+    void *handle;              // 内部采集句柄
     int sample_rate;           // 采样率
     int channels;               // 通道数
     int frames_per_buffer;     // 每缓冲区帧数
@@ -29,8 +31,9 @@ typedef struct {
 
 /**
  * 打开并初始化音频采集设备
- * 
- * @param device     ALSA 设备名，如 "hw:0,0" (card 0, device 0)
+ *
+ * @param device     设备名，如 "hw:0,0"、"plughw:CARD=Camera_1,DEV=0"、
+ *                   "parec" 或 "parec:<pulse_source_name>"
  * @param sample_rate 采样率，如 16000
  * @param channels   通道数，如 1 (单声道)
  * @param duration_sec 采集时长（秒）
@@ -40,7 +43,7 @@ audio_capture_t* capture_open(const char *device, int sample_rate, int channels,
 
 /**
  * 开始采集音频
- * 
+ *
  * @param cap 采集句柄
  * @return    0 成功，-1 失败
  */
@@ -48,7 +51,7 @@ int capture_start(audio_capture_t *cap);
 
 /**
  * 采集指定帧数的音频数据
- * 
+ *
  * @param cap    采集句柄
  * @param frames 要采集的帧数
  * @param timeout_ms 超时时间（毫秒）
@@ -66,21 +69,21 @@ void capture_set_gain(audio_capture_t *cap, float gain);
 
 /**
  * 停止采集
- * 
+ *
  * @param cap 采集句柄
  */
 void capture_stop(audio_capture_t *cap);
 
 /**
  * 关闭并释放采集句柄
- * 
+ *
  * @param cap 采集句柄
  */
 void capture_close(audio_capture_t *cap);
 
 /**
  * 获取采集到的音频数据
- * 
+ *
  * @param cap 采集句柄
  * @return    音频数据指针（float 数组）
  */
@@ -88,7 +91,7 @@ float* capture_get_data(audio_capture_t *cap);
 
 /**
  * 获取采集的总帧数
- * 
+ *
  * @param cap 采集句柄
  * @return    总帧数
  */
