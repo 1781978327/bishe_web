@@ -96,6 +96,9 @@ sudo ./rknn_yamnet_demo_http 8089
 
 - `scripts/build.sh` 默认产物在 `Sound_Monitoring/build`
 - 根目录 `start_all_stack.sh` 优先尝试 `Sound_Monitoring/src/build`，如目录不同可显式设置 `SOUND_DIR`
+- 当前实时输入默认改成 `parec`，会直接跟随系统默认麦克风
+- 声音服务实时音频配置默认从 `Sound_Monitoring/config/runtime_audio.yaml` 读取；构建后会复制到 `Sound_Monitoring/build/config/runtime_audio.yaml`
+- 当前默认配置是不改硬件增益、不做 FFmpeg/SoX 额外滤波，只使用 `parec` 原始输入
 
 自检：
 
@@ -290,6 +293,19 @@ RISK_MODEL='qwen3-vl:235b-instruct'
 ```bash
 ./start_all_stack.sh
 ```
+
+如果你不是用 `start_all_stack.sh`，而是手动启动或重启 Spring Boot，需要先把这个文件加载进当前 shell，再启动后端：
+
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master
+set -a
+source .runtime/ai.env
+set +a
+cd web-springboot/demo3/demo
+./gradlew bootRun
+```
+
+如果只改了 `.runtime/ai.env` 里的 `VISION_API_KEY` / `VISION_BASE_URL` / `RISK_MODEL`，但后端没有重启，那么运行中的 Spring 进程不会自动拿到新值，AI 融合分析仍然可能显示“未配置 VISION_API_KEY”。
 
 对应的后端配置项在 `application.properties`：
 
