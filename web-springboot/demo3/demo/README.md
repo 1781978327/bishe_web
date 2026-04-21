@@ -212,6 +212,7 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 
 当前内置模型：
 
+- `coco_person_i8`
 - `person_2700_i8`
 - `yolov8s`
 - `yolov8n`

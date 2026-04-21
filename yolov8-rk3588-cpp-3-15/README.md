@@ -56,11 +56,13 @@ yolov8-rk3588-cpp-3-15/
 
 ## 常用模型
 
+- `model/RK3588/coco_person_i8.rknn`
 - `model/RK3588/person_2700_i8.rknn`
 - `model/RK3588/yolov8s.rknn`
 - `model/RK3588/yolov8n.rknn`
 - `model/RK3588/osnet_x0_25_market.rknn`
 - `model/coco_80_labels_list.txt`
+- `model/coco_person_i8.txt`
 - `model/person_2700_i8.txt`
 
 ## 编译
