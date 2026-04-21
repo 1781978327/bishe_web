@@ -2564,7 +2564,9 @@ std::string detect_model_path_locked() {
         return g_model_path;
     }
 
+
     std::vector<std::string> candidates = {
+        "../model/RK3588/best-coco-person-moto.rknn",
         DEFAULT_MODEL_PATH,
         "../model/RK3588/yolov8s.rknn",
         "../model/RK3588/yolov8n.rknn",

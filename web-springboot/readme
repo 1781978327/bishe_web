@@ -62,7 +62,7 @@ curl http://127.0.0.1:8080/api/rknn/status
 ## 重要说明
 
 - `/api/rknn/status` 会把视觉服务返回中的 `localhost/127.0.0.1` RTSP 地址改写成当前请求主机
-- 模型管理当前支持 `person_2700_i8`、`yolov8s`、`yolov8n` 三个内置模型，以及上传的 `.rknn + .txt`
+- 模型管理当前支持 `best-coco-person-moto`、`coco_person_i8`、`person_2700_i8`、`yolov8s`、`yolov8n` 五个内置模型，以及上传的 `.rknn + .txt`
 - `/api/rknn/forbidden-area` 当前保存在后端内存中，重启 Spring Boot 后会清空
 
 ## AI 融合分析

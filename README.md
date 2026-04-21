@@ -213,6 +213,7 @@ curl -X POST "http://127.0.0.1:8080/api/rknn/rtsp/camera/start"
 
 当前后端内置模型：
 
+- `best-coco-person-moto`
 - `coco_person_i8`
 - `person_2700_i8`
 - `yolov8s`

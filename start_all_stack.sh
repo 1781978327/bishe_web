@@ -22,7 +22,7 @@ VISION_MEDIAMTX_TEMPLATE="$ROOT_DIR/yolov8-rk3588-cpp-3-15/mediamtx.yml"
 VISION_MEDIAMTX_CONFIG="$VISION_DIR/mediamtx.yml"
 SUDO_PASSWORD="orangepi"
 DEFAULT_CAM0_SOURCE="/dev/v4l/by-path/platform-fc800000.usb-usb-0:1:1.0-video-index0"
-DEFAULT_CAM1_SOURCE="/dev/v4l/by-path/platform-fc880000.usb-usb-0:1:1.0-video-index0"
+DEFAULT_CAM1_SOURCE="/dev/video2"
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
