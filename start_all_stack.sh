@@ -21,8 +21,8 @@ VISION_DIR="$ROOT_DIR/yolov8-rk3588-cpp-3-15/build_release"
 VISION_MEDIAMTX_TEMPLATE="$ROOT_DIR/yolov8-rk3588-cpp-3-15/mediamtx.yml"
 VISION_MEDIAMTX_CONFIG="$VISION_DIR/mediamtx.yml"
 SUDO_PASSWORD="orangepi"
-DEFAULT_CAM0_SOURCE="/dev/v4l/by-path/platform-fc800000.usb-usb-0:1:1.0-video-index0"
-DEFAULT_CAM1_SOURCE="/dev/video2"
+DEFAULT_CAM0_SOURCE=""
+DEFAULT_CAM1_SOURCE=""
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
@@ -236,6 +236,22 @@ resolve_camera_source() {
   printf '%s' "$fallback_b"
 }
 
+discover_primary_camera_source() {
+  local candidate
+
+  shopt -s nullglob
+  for candidate in /dev/v4l/by-path/*video-index0; do
+    if [[ -e "$candidate" ]]; then
+      printf '%s' "$candidate"
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+
+  printf '%s' ""
+}
+
 discover_secondary_camera_source() {
   local primary_source="$1"
   local candidate
@@ -384,11 +400,11 @@ SOUND_HTTP_CMD="env LD_LIBRARY_PATH=./lib:\$LD_LIBRARY_PATH ./rknn_yamnet_demo_h
 start_service "sound_http" "sudo" "$SOUND_DIR" "$SOUND_HTTP_CMD"
 wait_for_http_ready "sound_http" "http://127.0.0.1:8089/health" '"status": "ok"' '^200$' 40
 
-CAM0_SOURCE="$(resolve_camera_source "${CAM0_SOURCE:-}" "$DEFAULT_CAM0_SOURCE" "/dev/video0" "/dev/video0")"
+CAM0_SOURCE="$(resolve_camera_source "${CAM0_SOURCE:-}" "$(discover_primary_camera_source)" "${DEFAULT_CAM0_SOURCE:-/dev/video0}" "/dev/video0")"
 if [[ -n "${CAM1_SOURCE:-}" ]]; then
   CAM1_SOURCE="$CAM1_SOURCE"
 else
-  CAM1_SOURCE="$(resolve_camera_source "" "$DEFAULT_CAM1_SOURCE" "$(discover_secondary_camera_source "$CAM0_SOURCE")" "/dev/video2")"
+  CAM1_SOURCE="$(resolve_camera_source "" "$(discover_secondary_camera_source "$CAM0_SOURCE")" "${DEFAULT_CAM1_SOURCE:-/dev/video2}" "/dev/video2")"
 fi
 
 echo "视觉服务摄像头源："

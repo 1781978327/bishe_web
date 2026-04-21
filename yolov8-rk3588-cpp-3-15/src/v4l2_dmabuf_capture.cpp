@@ -89,6 +89,7 @@ void close_capture(CaptureContext* cap) {
         close(cap->fd);
         cap->fd = -1;
     }
+    cap->device_name.clear();
     for (auto& b : cap->buffers) {
         dma_buf_free(b.fd, b.va, b.size);
         b.fd = -1;
@@ -216,6 +217,7 @@ int open_capture(const CaptureConfig& config, CaptureContext* out, std::string* 
         std::max<uint32_t>(fmt_sizeimage, static_cast<uint32_t>(fmt_width * fmt_height * 2)));
 
     out->fd = fd;
+    out->device_name = config.device_name;
     out->buf_type = buf_type;
     out->mplane = mplane;
     out->width = static_cast<int>(fmt_width);

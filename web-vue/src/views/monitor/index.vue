@@ -1495,8 +1495,7 @@ const handleTrackingToggle = async (enabled: string | number | boolean) => {
   }
 
   try {
-    // 兼容老后端：直接复用 inference/on 的 track 参数做跟踪即时切换
-    const endpoint = `/api/rknn/inference/on?track=${targetEnabled ? 'true' : 'false'}&tracker=${encodeURIComponent(trackerBackend.value)}`
+    const endpoint = `/api/rknn/tracker/set?enabled=${targetEnabled ? 'true' : 'false'}`
     const res = await fetch(endpoint, { method: 'POST' })
     const data = await res.json()
 

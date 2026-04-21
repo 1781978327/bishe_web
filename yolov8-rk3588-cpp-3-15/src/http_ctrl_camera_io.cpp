@@ -47,6 +47,11 @@ bool acquire_camera_frame(v4l2_dmabuf::CaptureContext* dmabuf_cap,
             }
             return !frame_out->empty();
         }
+        if (ret < 0) {
+            printf("[Capture] DMABUF 取帧失败，关闭采集等待重连: %s\n",
+                   dmabuf_cap->device_name.empty() ? "(unknown)" : dmabuf_cap->device_name.c_str());
+            v4l2_dmabuf::close_capture(dmabuf_cap);
+        }
         frame_out->release();
         return false;
     }
