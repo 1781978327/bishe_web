@@ -86,6 +86,7 @@ HTTP 服务启动时会优先读取音频配置文件：
 
 ```yaml
 realtime:
+  # 上报 Spring Boot 的最小置信度阈值（默认 0.15）
   device: "parec"
   fallback_device: "parec:alsa_input.usb-Web_Camera_Web_Camera_202409021440-02.mono-fallback.2"
   auto_start: true
@@ -138,6 +139,7 @@ export RT_AMIXER_CARD=5
 export RT_AMIXER_CONTROL=Mic
 export RT_AMIXER_VOLUME=60%
 export RT_CAPTURE_VOLUME=1.0
+export RT_REPORT_MIN_CONFIDENCE=0.15  # 上报 Spring Boot 的置信度阈值
 export RT_FFMPEG_FILTER_ENABLED=0
 export SOX_DENOISE_ENABLED=0
 export SOX_DENOISE_PROFILE=/home/orangepi/Desktop/web/bishebeifen-master/speech_camera2_80.prof
