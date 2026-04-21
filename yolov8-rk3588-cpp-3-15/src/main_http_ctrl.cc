@@ -734,6 +734,13 @@ std::string resolve_project_executable(const std::string& relative_path) {
 }
 
 std::string default_label_path() {
+    // 根据模型名称选择合适的标签文件
+    if (g_model_path.find("best-coco-person-moto.rknn") != std::string::npos) {
+        std::string resolved = resolve_project_file("model/RK3588/best-coco-person-moto.txt");
+        if (!resolved.empty()) return resolved;
+        return "model/RK3588/best-coco-person-moto.txt";
+    }
+    
     std::string resolved = resolve_project_file(DEFAULT_LABEL_REL_PATH);
     if (!resolved.empty()) return resolved;
     return DEFAULT_LABEL_REL_PATH;
@@ -2570,6 +2577,7 @@ std::string detect_model_path_locked() {
             candidates.push_back(path_join(root, "model/RK3588/yolov8s.rknn"));
             candidates.push_back(path_join(root, "model/RK3588/yolov8n.rknn"));
             candidates.push_back(path_join(root, "model/RK3588/yolov8m.rknn"));
+            candidates.push_back(path_join(root, "model/RK3588/best-coco-person-moto.rknn"));
         }
     }
 
