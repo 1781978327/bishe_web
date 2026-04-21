@@ -139,10 +139,13 @@ static float g_sox_denoise_amount = 0.25f;
 static char g_sox_bin[256] = "sox";
 static char g_sox_denoise_profile[512] = {0};
 static float g_rt_capture_volume = 1.0f;
+static int g_rt_pulse_set_default_source = 0;
+static char g_rt_pulse_source_volume[32] = "";
 static int g_rt_amixer_enabled = 0;
 static char g_rt_amixer_card[32] = "5";
 static char g_rt_amixer_control[64] = "Mic";
 static char g_rt_amixer_volume[32] = "60%";
+static char g_rt_amixer_auto_gain_control[32] = "";
 static int g_rt_ffmpeg_filter_enabled = 0;
 static char g_rt_ffmpeg_bin[256] = "ffmpeg";
 static char g_rt_ffmpeg_audio_filter[512] =
@@ -158,6 +161,7 @@ static char g_runtime_audio_config_path[512] = {0};
 #define RT_CHUNK_DURATION_SEC 3
 #define RT_HOP_SEC 1.5
 #define RT_DETECTION_THRESHOLD 0.05
+#define RT_REPORT_MIN_CONFIDENCE 0.15f
 #define RT_EVENT_PRE_SEC 3
 #define RT_EVENT_POST_SEC 3
 #define RT_EVENT_CLIP_SEC (RT_EVENT_PRE_SEC + RT_EVENT_POST_SEC)
@@ -252,7 +256,8 @@ static AsrResult run_asr_locked(const float *data, int num_frames);
 static int should_log_http_request(const char *method, const char *path);
 static std::string summarize_top_results(const ResultEntry *results, int result_count, int max_items);
 static void init_runtime_audio_yaml_config();
-static void apply_rt_capture_mixer();
+static void apply_rt_capture_pulse_settings(const char *device);
+static void apply_rt_capture_mixer(const char *device);
 static void init_rt_ffmpeg_filter_config();
 static int ffmpeg_rt_filter_is_ready();
 static int ffmpeg_filter_wav_inplace(const char *wav_path,
@@ -489,9 +494,14 @@ static void rt_push_event(float start_sec, float end_sec, float max_score) {
         strncat(keywords_str, rt_current_event.keywords[i], 63);
     }
 
-    // 上报到 Spring Boot
+    // 上报到 Spring Boot（仅当置信度达到上报阈值）
     if (saved == 0 && strlen(audio_path) > 0) {
-        report_to_spring_boot(audio_path, duration, keywords_str, max_score);
+        if (max_score >= RT_REPORT_MIN_CONFIDENCE) {
+            report_to_spring_boot(audio_path, duration, keywords_str, max_score);
+        } else {
+            printf("[REPORT] Skip Spring Boot report: confidence %.4f < %.2f\n",
+                   max_score, RT_REPORT_MIN_CONFIDENCE);
+        }
     }
 
     pthread_mutex_lock(&rt_mutex);
@@ -818,8 +828,6 @@ static int rt_start(const char *device) {
         return -2;
     }
 
-    apply_rt_capture_mixer();
-
     // 打开音频设备。默认走 parec，也就是 Pulse 当前默认麦克风。
     rt_cap = capture_open(rt_device, rt_sample_rate, 1, 60);
     if (!rt_cap &&
@@ -838,6 +846,9 @@ static int rt_start(const char *device) {
         pthread_mutex_unlock(&rt_mutex);
         return -3;
     }
+
+    apply_rt_capture_pulse_settings(rt_device);
+    apply_rt_capture_mixer(rt_device);
 
     capture_set_gain(rt_cap, g_rt_capture_volume);
     printf("[RT] Capture gain set to %.2f (%.0f%%)\n",
@@ -1046,6 +1057,10 @@ static void apply_runtime_audio_yaml_value(const std::string &key_path, const st
         if (capture_volume >= 0.0f && capture_volume <= 2.0f) {
             g_rt_capture_volume = capture_volume;
         }
+    } else if (key_path == "realtime.pulse.set_default_source") {
+        g_rt_pulse_set_default_source = parse_bool_text_local(value.c_str(), g_rt_pulse_set_default_source);
+    } else if (key_path == "realtime.pulse.source_volume") {
+        copy_string_value(g_rt_pulse_source_volume, sizeof(g_rt_pulse_source_volume), value);
     } else if (key_path == "realtime.mixer.enabled") {
         g_rt_amixer_enabled = parse_bool_text_local(value.c_str(), g_rt_amixer_enabled);
     } else if (key_path == "realtime.mixer.card") {
@@ -1054,6 +1069,8 @@ static void apply_runtime_audio_yaml_value(const std::string &key_path, const st
         copy_string_value(g_rt_amixer_control, sizeof(g_rt_amixer_control), value);
     } else if (key_path == "realtime.mixer.volume") {
         copy_string_value(g_rt_amixer_volume, sizeof(g_rt_amixer_volume), value);
+    } else if (key_path == "realtime.mixer.auto_gain_control") {
+        copy_string_value(g_rt_amixer_auto_gain_control, sizeof(g_rt_amixer_auto_gain_control), value);
     } else if (key_path == "realtime.filter.ffmpeg.enabled") {
         g_rt_ffmpeg_filter_enabled = parse_bool_text_local(value.c_str(), g_rt_ffmpeg_filter_enabled);
     } else if (key_path == "realtime.filter.ffmpeg.bin") {
@@ -1202,11 +1219,142 @@ static std::string shell_quote_single(const char *input) {
     return out;
 }
 
+static std::string run_command_capture(const std::string &cmd) {
+    std::string output;
+    FILE *pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+        return output;
+    }
+
+    char buffer[512];
+    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+        output += buffer;
+    }
+    pclose(pipe);
+    return output;
+}
+
+static std::string resolve_default_pulse_source_name() {
+    std::string info = run_command_capture("pactl info 2>/dev/null");
+    std::istringstream iss(info);
+    std::string line;
+    while (std::getline(iss, line)) {
+        std::string trimmed = trim_copy(line);
+        if (trimmed.rfind("Default Source:", 0) == 0) {
+            return trim_copy(trimmed.substr(strlen("Default Source:")));
+        }
+        if (trimmed.rfind("默认信源：", 0) == 0) {
+            return trim_copy(trimmed.substr(strlen("默认信源：")));
+        }
+        if (trimmed.rfind("默认信源:", 0) == 0) {
+            return trim_copy(trimmed.substr(strlen("默认信源:")));
+        }
+    }
+    return "";
+}
+
+static std::string extract_pulse_source_name_from_device(const char *device) {
+    if (!device || device[0] == '\0') {
+        return "";
+    }
+    if (strncmp(device, "parec:", 6) == 0) {
+        return std::string(device + 6);
+    }
+    if (strncmp(device, "pulse:", 6) == 0) {
+        return std::string(device + 6);
+    }
+    if (strcmp(device, "parec") == 0 || strcmp(device, "pulse") == 0) {
+        return resolve_default_pulse_source_name();
+    }
+    return "";
+}
+
+static int resolve_alsa_card_from_pulse_source(const char *source_name, char *card_out, size_t card_out_size) {
+    if (!source_name || source_name[0] == '\0' || !card_out || card_out_size == 0) {
+        return -1;
+    }
+
+    std::string sources = run_command_capture("pactl list sources 2>/dev/null");
+    std::istringstream iss(sources);
+    std::string line;
+    bool in_target = false;
+
+    while (std::getline(iss, line)) {
+        std::string trimmed = trim_copy(line);
+        if (trimmed.rfind("Source #", 0) == 0 || trimmed.rfind("信源 #", 0) == 0) {
+            in_target = false;
+            continue;
+        }
+
+        if (trimmed.rfind("Name:", 0) == 0) {
+            in_target = trim_copy(trimmed.substr(strlen("Name:"))) == source_name;
+            continue;
+        }
+        if (trimmed.rfind("名称：", 0) == 0) {
+            in_target = trim_copy(trimmed.substr(strlen("名称："))) == source_name;
+            continue;
+        }
+        if (trimmed.rfind("名称:", 0) == 0) {
+            in_target = trim_copy(trimmed.substr(strlen("名称:"))) == source_name;
+            continue;
+        }
+
+        if (!in_target) {
+            continue;
+        }
+
+        size_t pos = trimmed.find("alsa.card = \"");
+        if (pos != std::string::npos) {
+            pos += strlen("alsa.card = \"");
+            size_t end = trimmed.find('"', pos);
+            if (end != std::string::npos && end > pos) {
+                copy_string_value(card_out, card_out_size, trimmed.substr(pos, end - pos));
+                return 0;
+            }
+        }
+    }
+
+    return -1;
+}
+
+static void apply_rt_capture_pulse_settings(const char *device) {
+    std::string source_name = extract_pulse_source_name_from_device(device);
+    if (source_name.empty()) {
+        return;
+    }
+
+    if (g_rt_pulse_set_default_source) {
+        std::ostringstream cmd;
+        cmd << "pactl set-default-source " << shell_quote_single(source_name.c_str()) << " >/dev/null 2>&1";
+        int ret = system(cmd.str().c_str());
+        if (ret != 0) {
+            printf("[RT WARN] Failed to set Pulse default source: %s (ret=%d)\n", source_name.c_str(), ret);
+        } else {
+            printf("[RT] Pulse default source set to: %s\n", source_name.c_str());
+        }
+    }
+
+    if (g_rt_pulse_source_volume[0] != '\0') {
+        std::ostringstream cmd;
+        cmd << "pactl set-source-volume " << shell_quote_single(source_name.c_str())
+            << " " << shell_quote_single(g_rt_pulse_source_volume) << " >/dev/null 2>&1";
+        int ret = system(cmd.str().c_str());
+        if (ret != 0) {
+            printf("[RT WARN] Failed to set Pulse source volume: %s -> %s (ret=%d)\n",
+                   source_name.c_str(), g_rt_pulse_source_volume, ret);
+        } else {
+            printf("[RT] Pulse source volume applied: %s -> %s\n",
+                   source_name.c_str(), g_rt_pulse_source_volume);
+        }
+    }
+}
+
 static void init_rt_capture_mixer_config() {
     const char *env_enabled = getenv("RT_AMIXER_ENABLED");
     const char *env_card = getenv("RT_AMIXER_CARD");
     const char *env_control = getenv("RT_AMIXER_CONTROL");
     const char *env_volume = getenv("RT_AMIXER_VOLUME");
+    const char *env_auto_gain = getenv("RT_AMIXER_AUTO_GAIN_CONTROL");
 
     g_rt_amixer_enabled = parse_bool_text_local(env_enabled, g_rt_amixer_enabled);
     if (!g_rt_amixer_enabled) {
@@ -1227,6 +1375,10 @@ static void init_rt_capture_mixer_config() {
         strncpy(g_rt_amixer_volume, env_volume, sizeof(g_rt_amixer_volume) - 1);
         g_rt_amixer_volume[sizeof(g_rt_amixer_volume) - 1] = '\0';
     }
+    if (env_auto_gain && env_auto_gain[0]) {
+        strncpy(g_rt_amixer_auto_gain_control, env_auto_gain, sizeof(g_rt_amixer_auto_gain_control) - 1);
+        g_rt_amixer_auto_gain_control[sizeof(g_rt_amixer_auto_gain_control) - 1] = '\0';
+    }
 
     if (system("command -v amixer >/dev/null 2>&1") != 0) {
         g_rt_amixer_enabled = 0;
@@ -1234,15 +1386,35 @@ static void init_rt_capture_mixer_config() {
         return;
     }
 
-    printf("[RT] Hardware mic setup enabled: amixer -c %s sset %s %s\n",
-           g_rt_amixer_card, g_rt_amixer_control, g_rt_amixer_volume);
+    printf("[RT] Hardware mic setup enabled: amixer -c %s sset %s %s%s%s\n",
+           g_rt_amixer_card,
+           g_rt_amixer_control,
+           g_rt_amixer_volume,
+           g_rt_amixer_auto_gain_control[0] ? ", Auto Gain Control=" : "",
+           g_rt_amixer_auto_gain_control[0] ? g_rt_amixer_auto_gain_control : "");
 }
 
-static void apply_rt_capture_mixer() {
+static void apply_rt_capture_mixer(const char *device) {
     if (!g_rt_amixer_enabled) return;
 
+    char effective_card[32];
+    copy_string_value(effective_card, sizeof(effective_card), g_rt_amixer_card);
+
+    if (strcasecmp(effective_card, "auto") == 0 || effective_card[0] == '\0') {
+        std::string source_name = extract_pulse_source_name_from_device(device);
+        if (!source_name.empty() &&
+            resolve_alsa_card_from_pulse_source(source_name.c_str(), effective_card, sizeof(effective_card)) == 0) {
+            printf("[RT] Resolved mixer card from Pulse source %s -> card %s\n",
+                   source_name.c_str(), effective_card);
+        } else {
+            printf("[RT WARN] Failed to resolve mixer card automatically for device: %s\n",
+                   device ? device : "(null)");
+            return;
+        }
+    }
+
     std::ostringstream cmd;
-    cmd << "amixer -c " << shell_quote_single(g_rt_amixer_card)
+    cmd << "amixer -c " << shell_quote_single(effective_card)
         << " sset " << shell_quote_single(g_rt_amixer_control)
         << " " << shell_quote_single(g_rt_amixer_volume)
         << " >/dev/null 2>&1";
@@ -1250,12 +1422,28 @@ static void apply_rt_capture_mixer() {
     int ret = system(cmd.str().c_str());
     if (ret != 0) {
         printf("[RT WARN] Failed to apply hardware mic setup: amixer -c %s sset %s %s (ret=%d)\n",
-               g_rt_amixer_card, g_rt_amixer_control, g_rt_amixer_volume, ret);
+               effective_card, g_rt_amixer_control, g_rt_amixer_volume, ret);
         return;
     }
 
     printf("[RT] Applied hardware mic setup: amixer -c %s sset %s %s\n",
-           g_rt_amixer_card, g_rt_amixer_control, g_rt_amixer_volume);
+           effective_card, g_rt_amixer_control, g_rt_amixer_volume);
+
+    if (g_rt_amixer_auto_gain_control[0] != '\0') {
+        std::ostringstream agc_cmd;
+        agc_cmd << "amixer -c " << shell_quote_single(effective_card)
+                << " sset 'Auto Gain Control' " << shell_quote_single(g_rt_amixer_auto_gain_control)
+                << " >/dev/null 2>&1";
+
+        int agc_ret = system(agc_cmd.str().c_str());
+        if (agc_ret != 0) {
+            printf("[RT WARN] Failed to apply auto gain control: amixer -c %s sset 'Auto Gain Control' %s (ret=%d)\n",
+                   effective_card, g_rt_amixer_auto_gain_control, agc_ret);
+        } else {
+            printf("[RT] Applied auto gain control: amixer -c %s sset 'Auto Gain Control' %s\n",
+                   effective_card, g_rt_amixer_auto_gain_control);
+        }
+    }
 }
 
 static int create_temp_wav_path(const char *prefix, char *path_out, size_t path_size) {
