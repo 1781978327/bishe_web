@@ -8,6 +8,7 @@ import com.example.demo.repository.SensorDataRepository;
 import com.example.demo.repository.SensorThresholdRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,6 +42,8 @@ import java.util.Map;
 public class DetectionRecordAiAnalysisService {
 
     private static final Path UPLOAD_ROOT = Paths.get("./uploads").toAbsolutePath().normalize();
+    private static final String DEFAULT_AI_BASE_URL = "https://api.866646.xyz";
+    private static final String DEFAULT_AI_MODEL = "qwen3-vl:235b-instruct";
 
     private final DetectionRecordRepository detectionRecordRepository;
     private final SensorDataRepository sensorDataRepository;
@@ -66,6 +69,11 @@ public class DetectionRecordAiAnalysisService {
 
     @Value("${ai.analysis.sound-window-limit:5}")
     private int soundWindowLimit;
+
+    @PostConstruct
+    public void initLocalAiEnvFallback() {
+        applyLocalAiEnvFallback();
+    }
 
     public void preparePendingAnalysis(DetectionRecord record) {
         if (record == null) {
@@ -491,6 +499,106 @@ public class DetectionRecordAiAnalysisService {
         return e == null || e.getMessage() == null || e.getMessage().isBlank()
             ? e == null ? "未知错误" : e.getClass().getSimpleName()
             : e.getMessage();
+    }
+
+    private void applyLocalAiEnvFallback() {
+        Map<String, String> localEnv = loadLocalAiEnv();
+        if (localEnv.isEmpty()) {
+            return;
+        }
+
+        boolean changed = false;
+
+        if (isBlank(aiAnalysisApiKey)) {
+            String apiKey = localEnv.get("VISION_API_KEY");
+            if (!isBlank(apiKey)) {
+                aiAnalysisApiKey = apiKey;
+                changed = true;
+            }
+        }
+
+        if (isBlank(aiAnalysisBaseUrl) || DEFAULT_AI_BASE_URL.equals(trimTrailingSlash(aiAnalysisBaseUrl))) {
+            String baseUrl = localEnv.get("VISION_BASE_URL");
+            if (!isBlank(baseUrl)) {
+                aiAnalysisBaseUrl = baseUrl;
+                changed = true;
+            }
+        }
+
+        if (isBlank(aiAnalysisModel) || DEFAULT_AI_MODEL.equals(aiAnalysisModel)) {
+            String model = localEnv.get("RISK_MODEL");
+            if (!isBlank(model)) {
+                aiAnalysisModel = model;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            log.info("AI 融合分析配置已从本地 ai.env 加载: baseUrl={}, model={}, apiKeyLoaded={}",
+                aiAnalysisBaseUrl, aiAnalysisModel, !isBlank(aiAnalysisApiKey));
+        }
+    }
+
+    private Map<String, String> loadLocalAiEnv() {
+        for (Path candidate : aiEnvCandidates()) {
+            if (!Files.exists(candidate) || !Files.isRegularFile(candidate)) {
+                continue;
+            }
+
+            try {
+                Map<String, String> values = new LinkedHashMap<>();
+                for (String rawLine : Files.readAllLines(candidate, StandardCharsets.UTF_8)) {
+                    String line = rawLine.trim();
+                    if (line.isEmpty() || line.startsWith("#")) {
+                        continue;
+                    }
+                    if (line.startsWith("export ")) {
+                        line = line.substring("export ".length()).trim();
+                    }
+                    int idx = line.indexOf('=');
+                    if (idx <= 0) {
+                        continue;
+                    }
+                    String key = line.substring(0, idx).trim();
+                    String value = stripWrappingQuotes(line.substring(idx + 1).trim());
+                    values.put(key, value);
+                }
+
+                if (!values.isEmpty()) {
+                    log.info("检测到本地 AI 配置文件: {}", candidate.toAbsolutePath().normalize());
+                    return values;
+                }
+            } catch (IOException e) {
+                log.warn("读取本地 AI 配置文件失败: path={}, err={}", candidate, e.getMessage());
+            }
+        }
+
+        return Map.of();
+    }
+
+    private List<Path> aiEnvCandidates() {
+        Path cwd = Paths.get("").toAbsolutePath().normalize();
+        List<Path> candidates = new ArrayList<>();
+        candidates.add(cwd.resolve(".runtime/ai.env"));
+
+        Path cursor = cwd;
+        for (int i = 0; i < 6 && cursor != null; i++) {
+            candidates.add(cursor.resolve(".runtime/ai.env").normalize());
+            cursor = cursor.getParent();
+        }
+        return candidates;
+    }
+
+    private String stripWrappingQuotes(String value) {
+        if (value == null || value.length() < 2) {
+            return value;
+        }
+        char first = value.charAt(0);
+        char last = value.charAt(value.length() - 1);
+        if ((first == '\'' && last == '\'') || (first == '"' && last == '"')) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
     }
 
     private record ImageSnapshot(String label, String contentType, byte[] data) {

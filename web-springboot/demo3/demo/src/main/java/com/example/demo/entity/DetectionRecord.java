@@ -65,6 +65,25 @@ public class DetectionRecord {
     @Column(name = "sound_keywords", length = 200)
     private String soundKeywords;
 
+    // 兼容历史表结构中的旧字段，避免插入时触发 NOT NULL 约束异常
+    @Column(name = "confidence_score")
+    private Double confidenceScore;
+
+    @Column(name = "is_violence", nullable = false)
+    private Boolean isViolence = false;
+
+    @Column(name = "level", nullable = false)
+    private Integer level = 0;
+
+    @Column(name = "location", length = 200)
+    private String location;
+
+    @Column(name = "person_count")
+    private Integer personCount;
+
+    @Column(name = "processed_by")
+    private Long processedBy;
+
     @CreatedDate
     @Column(name = "create_time")
     private LocalDateTime createTime;

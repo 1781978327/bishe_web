@@ -492,14 +492,34 @@ public class SoundService {
             HttpEntity<SoundAnomalyReportRequest> entity = new HttpEntity<>(request, headers);
             ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
 
-            if (response.getStatusCode().is2xxSuccessful()) {
+            if (response.getStatusCode().is2xxSuccessful() && isSuccessResult(response.getBody())) {
                 log.info("✓ 声音异常已上报到安全记录");
             } else {
-                log.warn("声音异常上报失败: {}", response.getBody());
+                log.warn("声音异常上报失败: status={}, body={}",
+                    response.getStatusCode(), response.getBody());
             }
         } catch (Exception e) {
             log.error("上报声音异常到安全记录失败: {}", e.getMessage());
             e.printStackTrace();
+        }
+    }
+
+    private boolean isSuccessResult(String body) {
+        if (body == null || body.isBlank()) {
+            return false;
+        }
+
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            Map<String, Object> result = mapper.readValue(body, Map.class);
+            Object code = result.get("code");
+            if (code instanceof Number number) {
+                return number.intValue() == 200;
+            }
+            return false;
+        } catch (Exception e) {
+            log.warn("解析安全记录上报响应失败: body={}", body, e);
+            return false;
         }
     }
 
