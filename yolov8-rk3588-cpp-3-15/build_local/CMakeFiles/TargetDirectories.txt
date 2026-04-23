@@ -1,0 +1,11 @@
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/install/strip.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/install/local.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/install.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/list_install_components.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/rebuild_cache.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/edit_cache.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/drmprime_rtsp_push_test.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/rknn_yolov8_demo.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/rknn_http_ctrl.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/deepsort.dir
+/home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_local/CMakeFiles/bytetrack.dir
