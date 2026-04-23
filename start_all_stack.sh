@@ -396,7 +396,14 @@ start_service "backend" "user" "$BACKEND_DIR" "./gradlew bootRun"
 wait_for_http_ready "backend" "http://127.0.0.1:8080/api/status" "" '^(200|401|403)$' 80
 start_service "sensor_http" "sudo" "$SENSOR_DIR" "./sensor_reader_http"
 wait_for_http_ready "sensor_http" "http://127.0.0.1:8088/health" '"status": "ok"' '^200$' 40
-SOUND_HTTP_CMD="env LD_LIBRARY_PATH=./lib:\$LD_LIBRARY_PATH ./rknn_yamnet_demo_http 8089"
+SOUND_HTTP_CMD="env LD_LIBRARY_PATH=./lib:\$LD_LIBRARY_PATH \
+EMERGENCY_KWS_AUTO_START=${EMERGENCY_KWS_AUTO_START:-0} \
+EMERGENCY_KWS_REPORT_ENABLED=${EMERGENCY_KWS_REPORT_ENABLED:-1} \
+EMERGENCY_KWS_CMD=${EMERGENCY_KWS_CMD:-} \
+EMERGENCY_KWS_WORKDIR=${EMERGENCY_KWS_WORKDIR:-} \
+EMERGENCY_KWS_LOG_PATH=${EMERGENCY_KWS_LOG_PATH:-} \
+EMERGENCY_KWS_MODEL_DIR=${EMERGENCY_KWS_MODEL_DIR:-} \
+./rknn_yamnet_demo_http 8089"
 start_service "sound_http" "sudo" "$SOUND_DIR" "$SOUND_HTTP_CMD"
 wait_for_http_ready "sound_http" "http://127.0.0.1:8089/health" '"status": "ok"' '^200$' 40
 

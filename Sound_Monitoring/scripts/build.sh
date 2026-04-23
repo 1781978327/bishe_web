@@ -45,12 +45,25 @@ echo "[INFO] Building..."
 make -j$(nproc)
 
 # 复制库文件到build目录
-cp "$SCRIPT_DIR/3rdparty/rknpu2/librknnrt.so" "$BUILD_DIR/lib/"
-cp "$SCRIPT_DIR/3rdparty/rknpu1/librknn_api.so" "$BUILD_DIR/lib/"
+mkdir -p "$BUILD_DIR/lib"
+cp "$SCRIPT_DIR/3rdparty/rknpu2/Linux/aarch64/librknnrt.so" "$BUILD_DIR/lib/"
+cp "$SCRIPT_DIR/3rdparty/rknpu1/Linux/aarch64/librknn_api.so" "$BUILD_DIR/lib/"
 mkdir -p "$BUILD_DIR/model"
 cp "$SCRIPT_DIR/model/"* "$BUILD_DIR/model/"
 mkdir -p "$BUILD_DIR/config"
 cp "$SCRIPT_DIR/config/runtime_audio.yaml" "$BUILD_DIR/config/"
+
+if [ "${BUILD_WAKE_MONITOR:-1}" = "1" ]; then
+    echo "[INFO] Building C++ emergency wake monitor..."
+    if bash "$SCRIPT_DIR/scripts/build_wake_monitor.sh" "$BUILD_DIR/wake"; then
+        echo "[INFO] Wake monitor ready: $BUILD_DIR/wake/emergency_monitor"
+    else
+        echo "[WARN] Wake monitor build failed."
+        echo "[WARN] You can still use external monitor by setting EMERGENCY_KWS_CMD."
+    fi
+else
+    echo "[INFO] Skip wake monitor build (BUILD_WAKE_MONITOR=0)"
+fi
 
 echo ""
 echo "=========================================="
@@ -64,4 +77,7 @@ echo "  ./rknn_yamnet_demo model/yamnet音频.rknn model/test.wav"
 echo ""
 echo "To run live detection:"
 echo "  ./rknn_yamnet_demo_live -m model/yamnet音频.rknn -d parec"
+echo ""
+echo "Wake monitor binary (optional):"
+echo "  $BUILD_DIR/wake/emergency_monitor"
 echo ""

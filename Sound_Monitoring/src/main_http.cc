@@ -41,6 +41,12 @@
  *                             - 获取最近 N 秒（最大120秒）的麦克风转写文本
  *                             Response: {"success": true, "transcript": "...", "asr_lang": "cn"}
  *
+ *   POST /wake/start         - 启动紧急关键词唤醒监测（复用 emergency_monitor）
+ *   POST /wake/stop          - 停止紧急关键词唤醒监测
+ *   GET  /wake/status        - 查询唤醒监测状态
+ *   GET  /wake/events?limit=20
+ *                             - 获取最近唤醒日志（读取 emergency_log.txt）
+ *
  *   GET /health             - 健康检查
  *   GET /config             - 获取当前配置
  *   PUT /config             - 更新配置 (threshold, keywords)
@@ -62,12 +68,14 @@
 #include <signal.h>
 #include <pthread.h>
 #include <strings.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <errno.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <errno.h>
 #include <fstream>
 #include <vector>
@@ -121,6 +129,23 @@ static int g_rt_transcript_dump_idx = 0;
 static int g_rt_print_asr = 1;
 static int g_rt_print_window = 1;
 static int g_auto_start_realtime = 1;
+
+// ========== 紧急关键词唤醒（复用外部 C++ 程序） ==========
+static int g_emergency_kws_auto_start = 0;
+static int g_emergency_kws_report_enabled = 1;
+static int g_emergency_kws_running = 0;
+static pid_t g_emergency_kws_pid = -1;
+static pthread_mutex_t g_emergency_kws_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char g_emergency_kws_cmd[512] = "./wake/emergency_monitor";
+static char g_emergency_kws_workdir[512] = "./wake";
+static char g_emergency_kws_log_path[512] = "./wake/emergency_log.txt";
+static char g_emergency_kws_pid_file[512] = "/tmp/emergency_monitor.pid";
+static char g_emergency_kws_stdout_path[512] = "/tmp/emergency_monitor.out";
+static pthread_t g_emergency_kws_report_thread;
+static pthread_mutex_t g_emergency_kws_report_mutex = PTHREAD_MUTEX_INITIALIZER;
+static volatile int g_emergency_kws_report_running = 0;
+static long g_emergency_kws_report_offset = 0;
+static int g_emergency_kws_audio_count = 0;
 
 // ========== 配置 ==========
 typedef struct {
@@ -276,12 +301,26 @@ static int sox_denoise_buffer_inplace(float *data,
                                       int sample_rate,
                                       int num_channels,
                                       const char *context);
+static void init_emergency_kws_config();
+static int emergency_kws_start();
+static int emergency_kws_stop();
+static void emergency_kws_refresh_state();
+static int emergency_kws_reporter_start();
+static int emergency_kws_reporter_stop();
+static int save_recent_audio_for_emergency_kws(char *audio_path,
+                                               size_t audio_path_size,
+                                               float *duration_out);
+static void parse_emergency_log_line(const std::string &line,
+                                     std::string *timestamp,
+                                     std::string *keyword);
 
 // ========== Spring Boot 上报函数 ==========
-static int report_to_spring_boot(const char *audio_path, float duration,
-                                  const char *keywords, float confidence) {
+static int report_to_spring_boot_with_result(const char *audio_path, float duration,
+                                             const char *keywords, float confidence,
+                                             const char *result_prefix) {
     // 构建JSON请求体
     char json_body[2048];
+    char detection_result[1024];
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now);
     char time_str[64];
@@ -291,17 +330,34 @@ static int report_to_spring_boot(const char *audio_path, float duration,
     char escaped_keywords[1024] = {0};
     json_escape_string(keywords, escaped_keywords, sizeof(escaped_keywords));
 
+    if (confidence >= 0.0f) {
+        snprintf(detection_result, sizeof(detection_result),
+                 "%s - %s (置信度: %.2f%%)",
+                 result_prefix && result_prefix[0] ? result_prefix : "声音异常",
+                 escaped_keywords,
+                 confidence * 100.0f);
+    } else {
+        snprintf(detection_result, sizeof(detection_result),
+                 "%s - %s",
+                 result_prefix && result_prefix[0] ? result_prefix : "声音异常",
+                 escaped_keywords);
+    }
+
     snprintf(json_body, sizeof(json_body),
         "{"
         "\"cameraId\": -1,"
         "\"cameraName\": \"声音监测\","
         "\"detectionTime\": \"%s\","
-        "\"detectionResult\": \"声音异常 - %s (置信度: %.2f%%)\","
+        "\"detectionResult\": \"%s\","
         "\"audioUrl\": \"%s\","
         "\"audioDuration\": %.1f,"
         "\"soundKeywords\": \"%s\""
         "}",
-        time_str, escaped_keywords, confidence * 100, audio_path, duration, escaped_keywords);
+        time_str,
+        detection_result,
+        audio_path ? audio_path : "",
+        duration,
+        escaped_keywords);
 
     printf("[REPORT] Sending to Spring Boot: %s\n", json_body);
 
@@ -377,6 +433,11 @@ static int report_to_spring_boot(const char *audio_path, float duration,
 
     printf("[REPORT ERROR] No response from Spring Boot\n");
     return -1;
+}
+
+static int report_to_spring_boot(const char *audio_path, float duration,
+                                  const char *keywords, float confidence) {
+    return report_to_spring_boot_with_result(audio_path, duration, keywords, confidence, "声音异常");
 }
 
 // ========== 事件音频存储 ==========
@@ -605,6 +666,72 @@ static void rt_ring_free(RingBuffer *rb) {
     rb->capacity = 0;
     rb->size = 0;
     rb->write_idx = 0;
+}
+
+static int save_recent_audio_for_emergency_kws(char *audio_path,
+                                               size_t audio_path_size,
+                                               float *duration_out) {
+    if (!audio_path || audio_path_size == 0) return -1;
+    audio_path[0] = '\0';
+    if (duration_out) *duration_out = 0.0f;
+
+    std::vector<float> frames;
+    int sample_rate = 0;
+    int copy_frames = 0;
+
+    pthread_mutex_lock(&rt_mutex);
+    sample_rate = rt_sample_rate;
+    if (rt_ring.data && rt_ring.size > 0 && sample_rate > 0) {
+        int need_frames = sample_rate * RT_EVENT_CLIP_SEC;
+        copy_frames = std::min(need_frames, rt_ring.size);
+        if (copy_frames > 0) {
+            frames.resize(copy_frames);
+            rt_ring_get_latest(&rt_ring, frames.data(), copy_frames);
+        }
+    }
+    pthread_mutex_unlock(&rt_mutex);
+
+    if (frames.empty()) {
+        printf("[KWS REPORT] No realtime audio buffer available for keyword event\n");
+        return -1;
+    }
+
+    struct stat st;
+    if (stat(rt_save_dir, &st) != 0) {
+        if (mkdir(rt_save_dir, 0755) != 0 && errno != EEXIST) {
+            printf("[KWS REPORT] Failed to create audio dir: %s\n", rt_save_dir);
+            return -1;
+        }
+    }
+
+    time_t now = time(NULL);
+    int audio_id = __sync_fetch_and_add(&g_emergency_kws_audio_count, 1);
+    snprintf(audio_path, audio_path_size, "%s/kws_event_%d_%ld.wav",
+             rt_save_dir, audio_id, (long)now);
+
+    int ret = save_audio(audio_path, frames.data(), copy_frames, sample_rate, 1);
+    if (ret != 0) {
+        printf("[KWS REPORT] Failed to save keyword audio: %s\n", audio_path);
+        audio_path[0] = '\0';
+        return -1;
+    }
+
+    int ffmpeg_ok = 0;
+    if (ffmpeg_rt_filter_is_ready()) {
+        ffmpeg_ok = (ffmpeg_filter_wav_inplace(audio_path, sample_rate, 1, "kws-event") == 0);
+    }
+    if (!ffmpeg_ok) {
+        (void)sox_denoise_wav_inplace(audio_path, "kws-event");
+    }
+
+    if (duration_out) {
+        *duration_out = (float)copy_frames / (float)sample_rate;
+    }
+    printf("[KWS REPORT] Keyword audio saved: %s (%d frames, %.1fs)\n",
+           audio_path,
+           copy_frames,
+           sample_rate > 0 ? (float)copy_frames / (float)sample_rate : 0.0f);
+    return 0;
 }
 
 static void event_audio_capture_pre_roll(RingBuffer *rb, int pre_frames) {
@@ -1446,6 +1573,114 @@ static void apply_rt_capture_mixer(const char *device) {
     }
 }
 
+static std::string dirname_from_path(const std::string &path) {
+    if (path.empty()) return ".";
+    size_t pos = path.find_last_of('/');
+    if (pos == std::string::npos) return ".";
+    if (pos == 0) return "/";
+    return path.substr(0, pos);
+}
+
+static int path_has_whitespace(const char *path) {
+    if (!path) return 1;
+    for (const char *p = path; *p; ++p) {
+        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') return 1;
+    }
+    return 0;
+}
+
+static void derive_emergency_kws_paths_from_cmd(int lock_workdir, int lock_log) {
+    if (g_emergency_kws_cmd[0] == '\0') return;
+    if (path_has_whitespace(g_emergency_kws_cmd)) return;
+
+    std::string cmd_path(g_emergency_kws_cmd);
+    std::string workdir = dirname_from_path(cmd_path);
+    if (!lock_workdir && !workdir.empty()) {
+        copy_string_value(g_emergency_kws_workdir, sizeof(g_emergency_kws_workdir), workdir);
+    }
+
+    if (!lock_log && !workdir.empty()) {
+        std::string log_path = workdir;
+        if (log_path.back() != '/') log_path.push_back('/');
+        log_path += "emergency_log.txt";
+        copy_string_value(g_emergency_kws_log_path, sizeof(g_emergency_kws_log_path), log_path);
+    }
+}
+
+static void resolve_emergency_kws_default_cmd(int lock_cmd, int lock_workdir, int lock_log) {
+    const char *candidates[] = {
+        "./wake/emergency_monitor",
+        "./build/wake/emergency_monitor",
+        "../build/wake/emergency_monitor",
+        "../../build/wake/emergency_monitor",
+        "../wake/emergency_monitor",
+        "../../wake/emergency_monitor",
+        "/home/orangepi/Desktop/web/语音唤醒/emergency_monitor",
+        NULL
+    };
+
+    if (!lock_cmd && !path_exists(g_emergency_kws_cmd)) {
+        for (int i = 0; candidates[i] != NULL; ++i) {
+            if (path_exists(candidates[i])) {
+                copy_string_value(g_emergency_kws_cmd, sizeof(g_emergency_kws_cmd), candidates[i]);
+                break;
+            }
+        }
+    }
+
+    derive_emergency_kws_paths_from_cmd(lock_workdir, lock_log);
+}
+
+static void init_emergency_kws_config() {
+    const char *env_auto = getenv("EMERGENCY_KWS_AUTO_START");
+    const char *env_report = getenv("EMERGENCY_KWS_REPORT_ENABLED");
+    const char *env_cmd = getenv("EMERGENCY_KWS_CMD");
+    const char *env_workdir = getenv("EMERGENCY_KWS_WORKDIR");
+    const char *env_log = getenv("EMERGENCY_KWS_LOG_PATH");
+    const char *env_pid = getenv("EMERGENCY_KWS_PID_FILE");
+    const char *env_stdout = getenv("EMERGENCY_KWS_STDOUT_PATH");
+    int lock_cmd = (env_cmd && env_cmd[0]) ? 1 : 0;
+    int lock_workdir = (env_workdir && env_workdir[0]) ? 1 : 0;
+    int lock_log = (env_log && env_log[0]) ? 1 : 0;
+
+    if (env_auto && env_auto[0]) {
+        g_emergency_kws_auto_start = parse_bool_text_local(env_auto, g_emergency_kws_auto_start);
+    }
+    if (env_report && env_report[0]) {
+        g_emergency_kws_report_enabled = parse_bool_text_local(env_report, g_emergency_kws_report_enabled);
+    }
+    if (env_cmd && env_cmd[0]) {
+        strncpy(g_emergency_kws_cmd, env_cmd, sizeof(g_emergency_kws_cmd) - 1);
+    }
+    if (env_workdir && env_workdir[0]) {
+        strncpy(g_emergency_kws_workdir, env_workdir, sizeof(g_emergency_kws_workdir) - 1);
+    }
+    if (env_log && env_log[0]) {
+        strncpy(g_emergency_kws_log_path, env_log, sizeof(g_emergency_kws_log_path) - 1);
+    }
+    if (env_pid && env_pid[0]) {
+        strncpy(g_emergency_kws_pid_file, env_pid, sizeof(g_emergency_kws_pid_file) - 1);
+    }
+    if (env_stdout && env_stdout[0]) {
+        strncpy(g_emergency_kws_stdout_path, env_stdout, sizeof(g_emergency_kws_stdout_path) - 1);
+    }
+
+    resolve_emergency_kws_default_cmd(lock_cmd, lock_workdir, lock_log);
+
+    emergency_kws_refresh_state();
+    printf("[KWS] config: auto_start=%s, report=%s, cmd=%s, workdir=%s\n",
+           g_emergency_kws_auto_start ? "on" : "off",
+           g_emergency_kws_report_enabled ? "on" : "off",
+           g_emergency_kws_cmd,
+           g_emergency_kws_workdir);
+    if (!path_exists(g_emergency_kws_cmd)) {
+        printf("[KWS] warning: command not found: %s\n", g_emergency_kws_cmd);
+    }
+    if (g_emergency_kws_running) {
+        (void)emergency_kws_reporter_start();
+    }
+}
+
 static int create_temp_wav_path(const char *prefix, char *path_out, size_t path_size) {
     if (!prefix || !path_out || path_size == 0) return -1;
 
@@ -1915,6 +2150,372 @@ static int parse_flag_from_query(const char *query, const char *key) {
     return 0;
 }
 
+static int emergency_kws_is_process_alive(pid_t pid) {
+    if (pid <= 0) return 0;
+    if (kill(pid, 0) == 0) return 1;
+    return errno == EPERM;
+}
+
+static int emergency_kws_write_pid_file_locked(pid_t pid) {
+    if (g_emergency_kws_pid_file[0] == '\0' || pid <= 0) return -1;
+    FILE *f = fopen(g_emergency_kws_pid_file, "w");
+    if (!f) {
+        printf("[KWS] Failed to write pid file: %s\n", g_emergency_kws_pid_file);
+        return -1;
+    }
+    fprintf(f, "%d\n", (int)pid);
+    fclose(f);
+    return 0;
+}
+
+static int emergency_kws_read_pid_file_locked(pid_t *pid_out) {
+    if (!pid_out || g_emergency_kws_pid_file[0] == '\0') return -1;
+    FILE *f = fopen(g_emergency_kws_pid_file, "r");
+    if (!f) return -1;
+
+    long v = -1;
+    int ok = fscanf(f, "%ld", &v);
+    fclose(f);
+    if (ok != 1 || v <= 0) return -1;
+    *pid_out = (pid_t)v;
+    return 0;
+}
+
+static void emergency_kws_remove_pid_file_locked() {
+    if (g_emergency_kws_pid_file[0]) {
+        (void)remove(g_emergency_kws_pid_file);
+    }
+}
+
+static int emergency_kws_try_reap_locked(pid_t pid, int *status_out) {
+    if (pid <= 0) return 0;
+    int status = 0;
+    pid_t w = waitpid(pid, &status, WNOHANG);
+    if (w == pid) {
+        if (status_out) *status_out = status;
+        return 1;
+    }
+    return 0;
+}
+
+static void emergency_kws_refresh_state_locked() {
+    if (g_emergency_kws_pid > 0) {
+        int status = 0;
+        if (emergency_kws_try_reap_locked(g_emergency_kws_pid, &status)) {
+            g_emergency_kws_running = 0;
+            g_emergency_kws_pid = -1;
+            emergency_kws_remove_pid_file_locked();
+        }
+    }
+
+    if (emergency_kws_is_process_alive(g_emergency_kws_pid)) {
+        g_emergency_kws_running = 1;
+        return;
+    }
+
+    pid_t pid_from_file = -1;
+    if (emergency_kws_read_pid_file_locked(&pid_from_file) == 0) {
+        int status = 0;
+        if (emergency_kws_try_reap_locked(pid_from_file, &status)) {
+            g_emergency_kws_running = 0;
+            g_emergency_kws_pid = -1;
+            emergency_kws_remove_pid_file_locked();
+            return;
+        }
+
+        if (emergency_kws_is_process_alive(pid_from_file)) {
+            g_emergency_kws_pid = pid_from_file;
+            g_emergency_kws_running = 1;
+            return;
+        }
+    }
+
+    g_emergency_kws_running = 0;
+    g_emergency_kws_pid = -1;
+    emergency_kws_remove_pid_file_locked();
+}
+
+static int emergency_kws_start_locked() {
+    emergency_kws_refresh_state_locked();
+    if (g_emergency_kws_running) return 1;
+
+    if (!path_exists(g_emergency_kws_cmd)) {
+        printf("[KWS] Command not found: %s\n", g_emergency_kws_cmd);
+        return -2;
+    }
+
+    char cmd_for_exec[1024] = {0};
+    if (g_emergency_kws_cmd[0] == '/') {
+        copy_string_value(cmd_for_exec, sizeof(cmd_for_exec), g_emergency_kws_cmd);
+    } else {
+        char *resolved = realpath(g_emergency_kws_cmd, NULL);
+        if (resolved != NULL) {
+            copy_string_value(cmd_for_exec, sizeof(cmd_for_exec), resolved);
+            free(resolved);
+        } else {
+            copy_string_value(cmd_for_exec, sizeof(cmd_for_exec), g_emergency_kws_cmd);
+        }
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        printf("[KWS] fork failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    if (pid == 0) {
+        // Child process
+        (void)setsid();
+        if (g_emergency_kws_workdir[0]) {
+            (void)chdir(g_emergency_kws_workdir);
+        }
+
+        int fd = -1;
+        if (g_emergency_kws_stdout_path[0]) {
+            fd = open(g_emergency_kws_stdout_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        }
+        if (fd >= 0) {
+            (void)dup2(fd, STDOUT_FILENO);
+            (void)dup2(fd, STDERR_FILENO);
+            if (fd > STDERR_FILENO) close(fd);
+        }
+
+        execl(cmd_for_exec, cmd_for_exec, (char *)NULL);
+        // fallback: run through shell
+        execl("/bin/sh", "sh", "-c", g_emergency_kws_cmd, (char *)NULL);
+        fprintf(stderr, "[KWS] exec failed: cmd=%s err=%s\n",
+                cmd_for_exec, strerror(errno));
+        _exit(127);
+    }
+
+    g_emergency_kws_pid = pid;
+    g_emergency_kws_running = 1;
+    (void)emergency_kws_write_pid_file_locked(pid);
+    usleep(200 * 1000);
+
+    int early_status = 0;
+    if (emergency_kws_try_reap_locked(pid, &early_status)) {
+        g_emergency_kws_running = 0;
+        g_emergency_kws_pid = -1;
+        emergency_kws_remove_pid_file_locked();
+        printf("[KWS] Monitor exited immediately after start (pid=%d)\n", (int)pid);
+        return -3;
+    }
+
+    if (!emergency_kws_is_process_alive(pid)) {
+        g_emergency_kws_running = 0;
+        g_emergency_kws_pid = -1;
+        emergency_kws_remove_pid_file_locked();
+        printf("[KWS] Monitor is not alive after start check (pid=%d)\n", (int)pid);
+        return -3;
+    }
+
+    printf("[KWS] Emergency keyword monitor started (pid=%d)\n", (int)pid);
+    return 0;
+}
+
+static int emergency_kws_stop_locked() {
+    emergency_kws_refresh_state_locked();
+    if (!g_emergency_kws_running || g_emergency_kws_pid <= 0) return 1;
+
+    pid_t pid = g_emergency_kws_pid;
+    (void)kill(pid, SIGTERM);
+
+    for (int i = 0; i < 20; ++i) {
+        int status = 0;
+        pid_t w = waitpid(pid, &status, WNOHANG);
+        if (w == pid) break;
+        if (w < 0 && errno == ECHILD) break;
+        if (!emergency_kws_is_process_alive(pid)) break;
+        usleep(100 * 1000);
+    }
+
+    if (emergency_kws_is_process_alive(pid)) {
+        (void)kill(pid, SIGKILL);
+        for (int i = 0; i < 10; ++i) {
+            int status = 0;
+            pid_t w = waitpid(pid, &status, WNOHANG);
+            if (w == pid) break;
+            if (w < 0 && errno == ECHILD) break;
+            if (!emergency_kws_is_process_alive(pid)) break;
+            usleep(100 * 1000);
+        }
+    }
+
+    {
+        int status = 0;
+        (void)waitpid(pid, &status, WNOHANG);
+    }
+
+    g_emergency_kws_running = emergency_kws_is_process_alive(pid) ? 1 : 0;
+    if (!g_emergency_kws_running) {
+        g_emergency_kws_pid = -1;
+        emergency_kws_remove_pid_file_locked();
+        printf("[KWS] Emergency keyword monitor stopped\n");
+        return 0;
+    }
+
+    printf("[KWS] Failed to stop process pid=%d\n", (int)pid);
+    return -1;
+}
+
+static int emergency_kws_start() {
+    pthread_mutex_lock(&g_emergency_kws_mutex);
+    int ret = emergency_kws_start_locked();
+    pthread_mutex_unlock(&g_emergency_kws_mutex);
+    if (ret == 0 || ret == 1) {
+        (void)emergency_kws_reporter_start();
+    }
+    return ret;
+}
+
+static int emergency_kws_stop() {
+    pthread_mutex_lock(&g_emergency_kws_mutex);
+    int ret = emergency_kws_stop_locked();
+    pthread_mutex_unlock(&g_emergency_kws_mutex);
+    if (ret == 0 || ret == 1) {
+        (void)emergency_kws_reporter_stop();
+    }
+    return ret;
+}
+
+static void emergency_kws_refresh_state() {
+    pthread_mutex_lock(&g_emergency_kws_mutex);
+    emergency_kws_refresh_state_locked();
+    pthread_mutex_unlock(&g_emergency_kws_mutex);
+}
+
+static void *emergency_kws_report_thread_main(void *arg) {
+    (void)arg;
+    printf("[KWS REPORT] Emergency keyword report watcher started\n");
+
+    while (g_emergency_kws_report_running) {
+        char log_path[512] = {0};
+
+        pthread_mutex_lock(&g_emergency_kws_mutex);
+        strncpy(log_path, g_emergency_kws_log_path, sizeof(log_path) - 1);
+        pthread_mutex_unlock(&g_emergency_kws_mutex);
+
+        if (log_path[0] != '\0') {
+            struct stat st;
+            if (stat(log_path, &st) == 0 && S_ISREG(st.st_mode)) {
+                if (g_emergency_kws_report_offset > st.st_size) {
+                    g_emergency_kws_report_offset = 0;
+                }
+
+                FILE *f = fopen(log_path, "r");
+                if (f) {
+                    if (g_emergency_kws_report_offset > 0) {
+                        (void)fseek(f, g_emergency_kws_report_offset, SEEK_SET);
+                    }
+
+                    char line_buf[1024];
+                    while (g_emergency_kws_report_running &&
+                           fgets(line_buf, sizeof(line_buf), f) != NULL) {
+                        long pos = ftell(f);
+                        if (pos >= 0) {
+                            g_emergency_kws_report_offset = pos;
+                        }
+
+                        std::string line = trim_copy(line_buf);
+                        if (line.empty()) {
+                            continue;
+                        }
+
+                        std::string timestamp;
+                        std::string keyword;
+                        parse_emergency_log_line(line, &timestamp, &keyword);
+                        if (keyword.empty()) {
+                            continue;
+                        }
+
+                        printf("[KWS REPORT] Keyword detected, reporting to Spring Boot: %s\n",
+                               keyword.c_str());
+
+                        char audio_path[512] = {0};
+                        float audio_duration = 0.0f;
+                        if (save_recent_audio_for_emergency_kws(audio_path,
+                                                                sizeof(audio_path),
+                                                                &audio_duration) != 0) {
+                            printf("[KWS REPORT] Continue reporting keyword without audio clip\n");
+                        }
+
+                        (void)report_to_spring_boot_with_result(
+                            audio_path,
+                            audio_duration,
+                            keyword.c_str(),
+                            -1.0f,
+                            "紧急关键词触发");
+                    }
+                    fclose(f);
+                }
+            }
+        }
+
+        for (int i = 0; i < 10 && g_emergency_kws_report_running; ++i) {
+            usleep(100 * 1000);
+        }
+    }
+
+    printf("[KWS REPORT] Emergency keyword report watcher stopped\n");
+    return NULL;
+}
+
+static int emergency_kws_reporter_start() {
+    if (!g_emergency_kws_report_enabled) {
+        return 0;
+    }
+
+    pthread_mutex_lock(&g_emergency_kws_report_mutex);
+    if (g_emergency_kws_report_running) {
+        pthread_mutex_unlock(&g_emergency_kws_report_mutex);
+        return 0;
+    }
+
+    char log_path[512] = {0};
+    pthread_mutex_lock(&g_emergency_kws_mutex);
+    strncpy(log_path, g_emergency_kws_log_path, sizeof(log_path) - 1);
+    pthread_mutex_unlock(&g_emergency_kws_mutex);
+
+    struct stat st;
+    if (log_path[0] != '\0' && stat(log_path, &st) == 0 && S_ISREG(st.st_mode)) {
+        g_emergency_kws_report_offset = st.st_size;
+    } else {
+        g_emergency_kws_report_offset = 0;
+    }
+
+    g_emergency_kws_report_running = 1;
+    int ret = pthread_create(&g_emergency_kws_report_thread, NULL,
+                             emergency_kws_report_thread_main, NULL);
+    if (ret != 0) {
+        g_emergency_kws_report_running = 0;
+        printf("[KWS REPORT] Failed to start report watcher: %s\n", strerror(ret));
+        pthread_mutex_unlock(&g_emergency_kws_report_mutex);
+        return -1;
+    }
+
+    pthread_mutex_unlock(&g_emergency_kws_report_mutex);
+    return 0;
+}
+
+static int emergency_kws_reporter_stop() {
+    pthread_t thread;
+    int should_join = 0;
+
+    pthread_mutex_lock(&g_emergency_kws_report_mutex);
+    if (g_emergency_kws_report_running) {
+        g_emergency_kws_report_running = 0;
+        thread = g_emergency_kws_report_thread;
+        should_join = 1;
+    }
+    pthread_mutex_unlock(&g_emergency_kws_report_mutex);
+
+    if (should_join) {
+        pthread_join(thread, NULL);
+    }
+    return 0;
+}
+
 static AsrResult run_asr_locked(const float *data, int num_frames) {
     AsrResult out;
     if (!g_asr_enabled) {
@@ -1936,6 +2537,8 @@ static int should_log_http_request(const char *method, const char *path) {
         if (strcmp(path, "/realtime/events") == 0 ||
             strcmp(path, "/realtime/windows") == 0 ||
             strcmp(path, "/realtime/status") == 0 ||
+            strcmp(path, "/wake/events") == 0 ||
+            strcmp(path, "/wake/status") == 0 ||
             strcmp(path, "/health") == 0) {
             return 0;
         }
@@ -1966,6 +2569,7 @@ static std::string summarize_top_results(const ResultEntry *results, int result_
 void signal_handler(int sig) {
     printf("\n收到信号 %d，关闭服务器...\n", sig);
     if (server_socket >= 0) close(server_socket);
+    (void)emergency_kws_stop();
     if (rt_active) rt_stop();
     g_asr_engine.Close();
     if (model_initialized) {
@@ -2761,8 +3365,10 @@ void handle_realtime_transcript(int client_fd, const char *query) {
     int should_save_audio = parse_flag_from_query(query, "save_audio");
 
     if (!g_asr_enabled) {
-        const char *body = "{\"success\": false, \"audio_saved\": false, \"audio_path\": \"\", "
-                           "\"error\": \"ASR disabled\", \"hint\": \"Set VOSK_MODEL_CN to enable\"}";
+        const char *body =
+            "{\"success\": false, \"audio_saved\": false, \"audio_path\": \"\", "
+            "\"error\": \"ASR disabled\", "
+            "\"hint\": \"Set ENABLE_VOSK_ASR=1 and VOSK_MODEL_CN / VOSK_MODEL_EN to enable\"}";
         send_response(client_fd, "200 OK", "application/json", body, strlen(body));
         return;
     }
@@ -2915,17 +3521,205 @@ void handle_realtime_transcript(int client_fd, const char *query) {
     send_response(client_fd, "200 OK", "application/json", body.c_str(), (int)body.size());
 }
 
+static void parse_emergency_log_line(const std::string &line,
+                                     std::string *timestamp,
+                                     std::string *keyword) {
+    if (timestamp) timestamp->clear();
+    if (keyword) keyword->clear();
+    if (line.empty()) return;
+
+    size_t left = line.find('[');
+    size_t right = line.find(']');
+    if (timestamp && left != std::string::npos && right != std::string::npos && right > left + 1) {
+        *timestamp = line.substr(left + 1, right - left - 1);
+    }
+
+    size_t pos = line.rfind("关键词:");
+    if (pos != std::string::npos) {
+        if (keyword) *keyword = trim_copy(line.substr(pos + strlen("关键词:")));
+        return;
+    }
+
+    pos = line.rfind(':');
+    if (pos != std::string::npos && pos + 1 < line.size() && keyword) {
+        *keyword = trim_copy(line.substr(pos + 1));
+    }
+}
+
+void handle_wake_start(int client_fd) {
+    int ret = emergency_kws_start();
+    if (ret == 0) {
+        const char *body = "{\"success\": true, \"message\": \"Emergency keyword monitor started\"}";
+        send_response(client_fd, "200 OK", "application/json", body, strlen(body));
+        return;
+    }
+    if (ret == 1) {
+        const char *body = "{\"success\": true, \"message\": \"Emergency keyword monitor already running\"}";
+        send_response(client_fd, "200 OK", "application/json", body, strlen(body));
+        return;
+    }
+    const char *body = "{\"success\": false, \"message\": \"Failed to start emergency keyword monitor\"}";
+    send_response(client_fd, "500 Internal Server Error", "application/json", body, strlen(body));
+}
+
+void handle_wake_stop(int client_fd) {
+    int ret = emergency_kws_stop();
+    if (ret == 0) {
+        const char *body = "{\"success\": true, \"message\": \"Emergency keyword monitor stopped\"}";
+        send_response(client_fd, "200 OK", "application/json", body, strlen(body));
+        return;
+    }
+    if (ret == 1) {
+        const char *body = "{\"success\": true, \"message\": \"Emergency keyword monitor is not running\"}";
+        send_response(client_fd, "200 OK", "application/json", body, strlen(body));
+        return;
+    }
+    const char *body = "{\"success\": false, \"message\": \"Failed to stop emergency keyword monitor\"}";
+    send_response(client_fd, "500 Internal Server Error", "application/json", body, strlen(body));
+}
+
+void handle_wake_status(int client_fd) {
+    int running = 0;
+    int auto_start = 0;
+    int pid_value = -1;
+    char cmd[512] = {0};
+    char workdir[512] = {0};
+    char log_path[512] = {0};
+    char pid_file[512] = {0};
+
+    pthread_mutex_lock(&g_emergency_kws_mutex);
+    emergency_kws_refresh_state_locked();
+    running = g_emergency_kws_running;
+    auto_start = g_emergency_kws_auto_start;
+    pid_value = (int)g_emergency_kws_pid;
+    strncpy(cmd, g_emergency_kws_cmd, sizeof(cmd) - 1);
+    strncpy(workdir, g_emergency_kws_workdir, sizeof(workdir) - 1);
+    strncpy(log_path, g_emergency_kws_log_path, sizeof(log_path) - 1);
+    strncpy(pid_file, g_emergency_kws_pid_file, sizeof(pid_file) - 1);
+    pthread_mutex_unlock(&g_emergency_kws_mutex);
+
+    char escaped_cmd[1024] = {0};
+    char escaped_workdir[1024] = {0};
+    char escaped_log_path[1024] = {0};
+    char escaped_pid_file[1024] = {0};
+    json_escape_string(cmd, escaped_cmd, sizeof(escaped_cmd));
+    json_escape_string(workdir, escaped_workdir, sizeof(escaped_workdir));
+    json_escape_string(log_path, escaped_log_path, sizeof(escaped_log_path));
+    json_escape_string(pid_file, escaped_pid_file, sizeof(escaped_pid_file));
+
+    char body[4096];
+    snprintf(body, sizeof(body),
+             "{\"success\": true, \"running\": %s, \"pid\": %d, \"auto_start\": %s, "
+             "\"report_enabled\": %s, \"report_watcher_running\": %s, "
+             "\"command\": \"%s\", \"workdir\": \"%s\", \"log_path\": \"%s\", \"pid_file\": \"%s\"}",
+             running ? "true" : "false",
+             pid_value,
+             auto_start ? "true" : "false",
+             g_emergency_kws_report_enabled ? "true" : "false",
+             g_emergency_kws_report_running ? "true" : "false",
+             escaped_cmd,
+             escaped_workdir,
+             escaped_log_path,
+             escaped_pid_file);
+    send_response(client_fd, "200 OK", "application/json", body, strlen(body));
+}
+
+void handle_wake_events(int client_fd, const char *query) {
+    int limit = parse_int_from_query(query, "limit", 20, 200);
+    char log_path[512] = {0};
+
+    pthread_mutex_lock(&g_emergency_kws_mutex);
+    strncpy(log_path, g_emergency_kws_log_path, sizeof(log_path) - 1);
+    pthread_mutex_unlock(&g_emergency_kws_mutex);
+
+    std::ifstream in(log_path);
+    if (!in.good()) {
+        char escaped_log_path[1024] = {0};
+        json_escape_string(log_path, escaped_log_path, sizeof(escaped_log_path));
+        char body[2048];
+        snprintf(body, sizeof(body),
+                 "{\"success\": false, \"count\": 0, \"events\": [], \"log_path\": \"%s\", "
+                 "\"error\": \"log file not found\"}",
+                 escaped_log_path);
+        send_response(client_fd, "200 OK", "application/json", body, strlen(body));
+        return;
+    }
+
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string trimmed = trim_copy(line);
+        if (!trimmed.empty()) lines.push_back(trimmed);
+    }
+
+    int start = 0;
+    if ((int)lines.size() > limit) {
+        start = (int)lines.size() - limit;
+    }
+
+    std::ostringstream out;
+    out << "{";
+    out << "\"success\": true,";
+    out << "\"count\": " << ((int)lines.size() - start) << ",";
+    out << "\"events\": [";
+
+    int out_idx = 0;
+    for (int i = start; i < (int)lines.size(); ++i) {
+        std::string ts;
+        std::string kw;
+        parse_emergency_log_line(lines[i], &ts, &kw);
+
+        char escaped_ts[256] = {0};
+        char escaped_kw[512] = {0};
+        char escaped_raw[2048] = {0};
+        json_escape_string(ts.c_str(), escaped_ts, sizeof(escaped_ts));
+        json_escape_string(kw.c_str(), escaped_kw, sizeof(escaped_kw));
+        json_escape_string(lines[i].c_str(), escaped_raw, sizeof(escaped_raw));
+
+        if (out_idx++ > 0) out << ",";
+        out << "{"
+            << "\"id\":" << out_idx << ","
+            << "\"timestamp\":\"" << escaped_ts << "\","
+            << "\"keyword\":\"" << escaped_kw << "\","
+            << "\"raw\":\"" << escaped_raw << "\""
+            << "}";
+    }
+
+    char escaped_log_path[1024] = {0};
+    json_escape_string(log_path, escaped_log_path, sizeof(escaped_log_path));
+    out << "],";
+    out << "\"log_path\":\"" << escaped_log_path << "\"";
+    out << "}";
+
+    std::string body = out.str();
+    send_response(client_fd, "200 OK", "application/json", body.c_str(), (int)body.size());
+}
+
 void handle_config(int client_fd) {
     char escaped_ffmpeg_bin[512] = {0};
     char escaped_ffmpeg_filter[1024] = {0};
     char escaped_config_path[1024] = {0};
     char escaped_default_device[512] = {0};
+    char escaped_kws_cmd[1024] = {0};
+    char escaped_kws_workdir[1024] = {0};
+    char escaped_kws_log_path[1024] = {0};
     json_escape_string(g_rt_ffmpeg_bin, escaped_ffmpeg_bin, sizeof(escaped_ffmpeg_bin));
     json_escape_string(g_rt_ffmpeg_audio_filter, escaped_ffmpeg_filter, sizeof(escaped_ffmpeg_filter));
     json_escape_string(g_runtime_audio_config_path, escaped_config_path, sizeof(escaped_config_path));
     json_escape_string(g_rt_default_device, escaped_default_device, sizeof(escaped_default_device));
+    json_escape_string(g_emergency_kws_cmd, escaped_kws_cmd, sizeof(escaped_kws_cmd));
+    json_escape_string(g_emergency_kws_workdir, escaped_kws_workdir, sizeof(escaped_kws_workdir));
+    json_escape_string(g_emergency_kws_log_path, escaped_kws_log_path, sizeof(escaped_kws_log_path));
 
-    char body[6144];
+    int kws_running = 0;
+    int kws_pid = -1;
+    pthread_mutex_lock(&g_emergency_kws_mutex);
+    emergency_kws_refresh_state_locked();
+    kws_running = g_emergency_kws_running;
+    kws_pid = (int)g_emergency_kws_pid;
+    pthread_mutex_unlock(&g_emergency_kws_mutex);
+
+    char body[8192];
     snprintf(body, sizeof(body),
         "{\"model_path\": \"%s\", \"anomaly_threshold\": %.2f, \"save_anomaly\": %d, "
         "\"keywords_count\": %d, \"asr_enabled\": %s, \"asr_model_cn\": \"%s\", \"asr_model_en\": \"%s\", "
@@ -2935,7 +3729,10 @@ void handle_config(int client_fd) {
         "\"rt_ffmpeg_filter_enabled\": %s, \"rt_ffmpeg_bin\": \"%s\", \"rt_ffmpeg_audio_filter\": \"%s\", "
         "\"rt_capture_volume\": %.2f, "
         "\"rt_amixer_enabled\": %s, \"rt_amixer_card\": \"%s\", "
-        "\"rt_amixer_control\": \"%s\", \"rt_amixer_volume\": \"%s\"}",
+        "\"rt_amixer_control\": \"%s\", \"rt_amixer_volume\": \"%s\", "
+        "\"wake_enabled\": true, \"wake_running\": %s, \"wake_pid\": %d, "
+        "\"wake_auto_start\": %s, \"wake_report_enabled\": %s, \"wake_report_watcher_running\": %s, "
+        "\"wake_command\": \"%s\", \"wake_workdir\": \"%s\", \"wake_log_path\": \"%s\"}",
         model_path, config.anomaly_threshold, config.save_anomaly,
         (int)(sizeof(anomaly_keywords) / sizeof(AnomalyKeyword)),
         g_asr_enabled ? "true" : "false",
@@ -2954,7 +3751,15 @@ void handle_config(int client_fd) {
         g_rt_amixer_enabled ? "true" : "false",
         g_rt_amixer_card,
         g_rt_amixer_control,
-        g_rt_amixer_volume);
+        g_rt_amixer_volume,
+        kws_running ? "true" : "false",
+        kws_pid,
+        g_emergency_kws_auto_start ? "true" : "false",
+        g_emergency_kws_report_enabled ? "true" : "false",
+        g_emergency_kws_report_running ? "true" : "false",
+        escaped_kws_cmd,
+        escaped_kws_workdir,
+        escaped_kws_log_path);
     send_response(client_fd, "200 OK", "application/json", body, strlen(body));
 }
 
@@ -3060,6 +3865,10 @@ void handle_client(int client_fd) {
         handle_realtime_start(client_fd, body);
     } else if (strcmp(method, "POST") == 0 && strcmp(path, "/realtime/stop") == 0) {
         handle_realtime_stop(client_fd);
+    } else if (strcmp(method, "POST") == 0 && strcmp(path, "/wake/start") == 0) {
+        handle_wake_start(client_fd);
+    } else if (strcmp(method, "POST") == 0 && strcmp(path, "/wake/stop") == 0) {
+        handle_wake_stop(client_fd);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
         handle_health(client_fd);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/config") == 0) {
@@ -3068,6 +3877,10 @@ void handle_client(int client_fd) {
         handle_realtime_status(client_fd);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/realtime/events") == 0) {
         handle_realtime_events(client_fd);
+    } else if (strcmp(method, "GET") == 0 && strcmp(path, "/wake/status") == 0) {
+        handle_wake_status(client_fd);
+    } else if (strcmp(method, "GET") == 0 && strcmp(path, "/wake/events") == 0) {
+        handle_wake_events(client_fd, query_str);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/realtime/windows") == 0) {
         handle_realtime_windows(client_fd, query_str);
     } else if (strcmp(method, "GET") == 0 && strcmp(path, "/realtime/transcript") == 0) {
@@ -3139,6 +3952,8 @@ int init_model() {
     model_initialized = 1;
     printf("[OK] YAMNet model initialized\n");
 
+    const char *enable_asr_env = getenv("ENABLE_VOSK_ASR");
+    int enable_asr = parse_bool_text_local(enable_asr_env, 0);
     const char *env_cn = getenv("VOSK_MODEL_CN");
     const char *env_en = getenv("VOSK_MODEL_EN");
     const char *default_cn_candidates[] = {
@@ -3151,6 +3966,12 @@ int init_model() {
         "../model/vosk-model-small-en-us-0.15",
         NULL
     };
+
+    if (!enable_asr) {
+        printf("[INFO] ASR disabled by default. Set ENABLE_VOSK_ASR=1 and "
+               "VOSK_MODEL_CN / VOSK_MODEL_EN to enable transcript.\n");
+        return 0;
+    }
 
     if (env_cn && env_cn[0]) {
         strncpy(g_asr_model_cn, env_cn, sizeof(g_asr_model_cn) - 1);
@@ -3187,7 +4008,8 @@ int init_model() {
             printf("[WARN] ASR init failed: %s\n", g_asr_engine.LastError().c_str());
         }
     } else {
-        printf("[INFO] ASR disabled. Set VOSK_MODEL_CN / VOSK_MODEL_EN to enable transcript.\n");
+        printf("[INFO] ASR disabled. Set ENABLE_VOSK_ASR=1 and "
+               "VOSK_MODEL_CN / VOSK_MODEL_EN to enable transcript.\n");
     }
     return 0;
 }
@@ -3201,6 +4023,7 @@ int main(int argc, char *argv[]) {
     const char *rt_capture_volume_percent_env = getenv("RT_CAPTURE_VOLUME_PERCENT");
 
     init_runtime_audio_yaml_config();
+    init_emergency_kws_config();
 
     if (auto_rt_env && auto_rt_env[0]) {
         if (strcmp(auto_rt_env, "0") == 0 ||
@@ -3287,6 +4110,20 @@ int main(int argc, char *argv[]) {
         printf("[INFO] Realtime auto-start disabled by AUTO_START_REALTIME=%s\n", auto_rt_env);
     }
 
+    if (g_emergency_kws_auto_start) {
+        int kws_ret = emergency_kws_start();
+        if (kws_ret == 0) {
+            printf("[OK] Emergency wake auto-start enabled\n");
+        } else if (kws_ret == 1) {
+            printf("[INFO] Emergency wake already running\n");
+        } else {
+            printf("[WARN] Emergency wake auto-start failed (ret=%d). "
+                   "Use POST /wake/start to start manually.\n", kws_ret);
+        }
+    } else {
+        printf("[INFO] Emergency wake auto-start disabled (EMERGENCY_KWS_AUTO_START=0)\n");
+    }
+
     printf("\n======================================================================\n");
     printf("  服务器启动成功！\n");
     printf("======================================================================\n");
@@ -3304,10 +4141,15 @@ int main(int argc, char *argv[]) {
     printf("    GET  /realtime/events  - 获取异常事件\n");
     printf("    GET  /realtime/windows?limit=5 - 获取最近窗口状态\n");
     printf("    GET  /realtime/transcript?seconds=120 - 获取最近麦克风转写\n");
+    printf("    POST /wake/start       - 启动紧急关键词唤醒监测\n");
+    printf("    POST /wake/stop        - 停止紧急关键词唤醒监测\n");
+    printf("    GET  /wake/status      - 查询唤醒监测状态\n");
+    printf("    GET  /wake/events?limit=20 - 获取最近关键词唤醒日志\n");
     printf("    GET  /health           - 健康检查\n");
     printf("    GET  /config           - 获取配置\n");
     printf("======================================================================\n");
     printf("  ASR 配置:\n");
+    printf("    export ENABLE_VOSK_ASR=1\n");
     printf("    export VOSK_MODEL_CN=/path/to/vosk-model-small-cn-0.22\n");
     printf("    export VOSK_MODEL_EN=/path/to/vosk-model-small-en-us-0.15\n");
     printf("    export VOSK_LIB_PATH=/path/to/libvosk.so   (可选)\n");
@@ -3319,6 +4161,13 @@ int main(int argc, char *argv[]) {
     printf("    export RT_AMIXER_VOLUME=60%%\n");
     printf("    export RT_CAPTURE_VOLUME=1.0   # 软件增益，默认不额外缩放\n");
     printf("    export SOUND_MONITORING_CONFIG=/path/to/runtime_audio.yaml\n");
+    printf("  唤醒词配置:\n");
+    printf("    export EMERGENCY_KWS_AUTO_START=1\n");
+    printf("    export EMERGENCY_KWS_REPORT_ENABLED=1   # 紧急关键词触发后自动上报安全记录并触发 AI 分析\n");
+    printf("    export EMERGENCY_KWS_CMD=./wake/emergency_monitor\n");
+    printf("    export EMERGENCY_KWS_WORKDIR=./wake\n");
+    printf("    export EMERGENCY_KWS_LOG_PATH=./wake/emergency_log.txt\n");
+    printf("    export EMERGENCY_KWS_MODEL_DIR=/path/to/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01\n");
     printf("  SoX 降噪配置:\n");
     printf("    export SOX_DENOISE_ENABLED=1\n");
     printf("    export SOX_DENOISE_PROFILE=/path/to/speech_camera2_80.prof\n");

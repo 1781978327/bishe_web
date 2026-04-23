@@ -72,6 +72,8 @@ public class SensorService {
 
     // 报警间隔（毫秒），避免短时间内重复记录
     private static final long ALERT_INTERVAL_MS = 60000; // 1分钟内不重复记录
+    private static final int SMOKE_ALERT_CONFIRM_SAMPLES = 3;
+    private int smokeAlertOverThresholdCount = 0;
 
     @PostConstruct
     public void init() {
@@ -281,8 +283,7 @@ public class SensorService {
             alertMsg.append("湿度超过阈值(").append(thresholds.get("humidity")).append("%) ");
         }
 
-        if (data.getSmoke() != null &&
-            data.getSmoke() > thresholds.get("smoke")) {
+        if (isSmokeAlertConfirmed(data.getSmoke())) {
             isAlert = true;
             alertMsg.append("烟雾浓度超过阈值(").append(thresholds.get("smoke")).append("ppm) ");
         }
@@ -303,6 +304,26 @@ public class SensorService {
                 createAlertRecord(data, alertMsg.toString());
             }
         }
+    }
+
+    /**
+     * MQ-2 经过 ADS1115 换算后偶尔会出现单点尖峰，烟雾报警需要连续多次确认。
+     */
+    private synchronized boolean isSmokeAlertConfirmed(Float smokeValue) {
+        Float smokeThreshold = thresholds.get("smoke");
+        if (smokeValue == null || smokeThreshold == null || smokeValue <= smokeThreshold) {
+            smokeAlertOverThresholdCount = 0;
+            return false;
+        }
+
+        smokeAlertOverThresholdCount++;
+        if (smokeAlertOverThresholdCount < SMOKE_ALERT_CONFIRM_SAMPLES) {
+            log.warn("烟雾浓度单次超阈值，等待连续确认({}/{}): {}ppm > {}ppm",
+                smokeAlertOverThresholdCount, SMOKE_ALERT_CONFIRM_SAMPLES, smokeValue, smokeThreshold);
+            return false;
+        }
+
+        return true;
     }
 
     /**

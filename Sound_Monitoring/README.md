@@ -1,5 +1,10 @@
 # Sound_Monitoring HTTP 服务说明
 
+cat /sys/bus/usb/devices/7-1/power/control
+cat /sys/bus/usb/devices/7-1/power/runtime_status
+cat /sys/bus/usb/devices/7-1/power/autosuspend
+当前usb麦克风已经设置取消省电模式
+
 当前仓库里声音主链路使用 `src/main_http.cc`，运行产物是 `rknn_yamnet_demo_http`，默认端口 `8089`。
 
 这个服务主要提供：
@@ -8,7 +13,9 @@
 - 上传音频自动转码后检测
 - 实时麦克风监测
 - 实时异常事件缓存
-- 可选 Vosk ASR 转写
+- 默认禁用、按需开启的 Vosk ASR 转写
+- 内置 C++ 紧急关键词唤醒（`wake/emergency_monitor.cpp`）
+- 紧急关键词触发后自动保存最近 6 秒实时音频、上报 Spring Boot 安全记录并触发 AI 融合分析
 - 自动上报 Spring Boot 安全记录
 
 ## 目录
@@ -18,6 +25,7 @@ Sound_Monitoring/
 ├── src/                 # 主程序与 HTTP 入口
 ├── utils/               # 音频/图像/文件工具
 ├── model/               # YAMNet 模型与标签
+├── wake/                # C++ 紧急关键词唤醒源码
 ├── 3rdparty/            # RKNN、FFTW、libsndfile 等依赖
 ├── scripts/             # 构建脚本
 ├── build/               # scripts/build.sh 默认输出目录
@@ -38,6 +46,7 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring
 - `build/rknn_yamnet_demo_http`
 - `build/lib/`
 - `build/model/`
+- `build/wake/emergency_monitor`（若检测到 sherpa-onnx C API 安装产物会自动构建）
 
 也可以手动构建：
 
@@ -51,6 +60,8 @@ make -j$(nproc)
 
 - `scripts/build.sh` 产物默认在 `Sound_Monitoring/build`
 - 根目录 `start_all_stack.sh` 优先尝试 `Sound_Monitoring/src/build`，若目录不同可手动设置 `SOUND_DIR`
+- 唤醒程序会优先输出到 `build/wake/emergency_monitor`
+- 如果自动构建失败，可单独执行：`bash ./scripts/build_wake_monitor.sh`
 
 ## 启动
 
@@ -130,6 +141,13 @@ realtime:
 ```bash
 export SOUND_MONITORING_CONFIG=/path/to/runtime_audio.yaml
 export AUTO_START_REALTIME=0
+export ENABLE_VOSK_ASR=0
+export EMERGENCY_KWS_AUTO_START=0
+export EMERGENCY_KWS_REPORT_ENABLED=1
+export EMERGENCY_KWS_CMD=./wake/emergency_monitor
+export EMERGENCY_KWS_WORKDIR=./wake
+export EMERGENCY_KWS_LOG_PATH=./wake/emergency_log.txt
+export EMERGENCY_KWS_MODEL_DIR=/path/to/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01
 export RT_PRINT_ASR=0
 export VOSK_MODEL_CN=/path/to/vosk-model-small-cn-0.22
 export VOSK_MODEL_EN=/path/to/vosk-model-small-en-us-0.15
@@ -151,12 +169,20 @@ export SOX_BIN=sox
 
 - `SOUND_MONITORING_CONFIG`：显式指定 `runtime_audio.yaml` 路径
 - `AUTO_START_REALTIME=0`：禁止启动时自动开启实时监测
+- `ENABLE_VOSK_ASR=0|1`：是否启用 Vosk 转写，默认 `0`
+- `EMERGENCY_KWS_AUTO_START=0|1`：是否自动启动紧急关键词唤醒，默认 `0`
+- `EMERGENCY_KWS_REPORT_ENABLED=0|1`：紧急关键词触发后是否自动保存最近 6 秒实时音频、上报安全记录并触发后端 AI 融合分析，默认 `1`
+- `EMERGENCY_KWS_CMD`：紧急关键词 C++ 可执行文件路径
+- `EMERGENCY_KWS_WORKDIR`：紧急关键词程序工作目录
+- `EMERGENCY_KWS_LOG_PATH`：紧急关键词日志文件路径
+- `EMERGENCY_KWS_MODEL_DIR`：唤醒模型目录（不设时程序会按内置候选路径自动查找）
+- 如果不显式设置 `EMERGENCY_KWS_CMD`，服务会优先尝试 `./wake/emergency_monitor`，再回退历史路径
 - `RT_PRINT_ASR=0`：关闭实时模式的周期性转写日志
 - `RT_AMIXER_ENABLED=0|1`：是否在启动实时监测前执行 `amixer`
 - `RT_AMIXER_CARD=5`、`RT_AMIXER_CONTROL=Mic`、`RT_AMIXER_VOLUME=60%`：例如对应 `amixer -c 5 sset Mic 60%`
 - `RT_CAPTURE_VOLUME=1.0`：软件增益，默认不额外放大或缩小
 - `RT_FFMPEG_FILTER_ENABLED=0|1`：显式关闭或开启 FFmpeg 实时滤波
-- `VOSK_MODEL_CN`、`VOSK_MODEL_EN`：显式指定中文/英文模型目录
+- `VOSK_MODEL_CN`、`VOSK_MODEL_EN`：在 `ENABLE_VOSK_ASR=1` 时指定中文/英文模型目录
 - `VOSK_LIB_PATH`：显式指定 `libvosk.so`
 - `SOX_DENOISE_ENABLED=0|1`：显式关闭或开启 SoX 降噪
 - `SOX_DENOISE_PROFILE`：噪声 profile 文件路径
@@ -315,6 +341,7 @@ curl -X POST http://127.0.0.1:8089/realtime/stop
 ### `GET /realtime/transcript`
 
 ```bash
+export ENABLE_VOSK_ASR=1
 curl "http://127.0.0.1:8089/realtime/transcript?seconds=120"
 curl "http://127.0.0.1:8089/realtime/transcript?seconds=30&save_audio=1"
 ```
@@ -324,6 +351,35 @@ curl "http://127.0.0.1:8089/realtime/transcript?seconds=30&save_audio=1"
 - `seconds` 上限是 `120`
 - `save_audio=1` 时，音频会保存到 `./debug_audio/`
 - 如果未启用 ASR，会返回 `success=false` 和 `ASR disabled`
+- 要启用转写，需要先设置 `ENABLE_VOSK_ASR=1`
+
+### `POST /wake/start`
+
+启动紧急关键词唤醒监测（启动 C++ `emergency_monitor` 进程）：
+
+```bash
+curl -X POST http://127.0.0.1:8089/wake/start
+```
+
+### `POST /wake/stop`
+
+```bash
+curl -X POST http://127.0.0.1:8089/wake/stop
+```
+
+### `GET /wake/status`
+
+```bash
+curl http://127.0.0.1:8089/wake/status
+```
+
+### `GET /wake/events`
+
+读取关键词唤醒日志（默认 20 条）：
+
+```bash
+curl "http://127.0.0.1:8089/wake/events?limit=20"
+```
 
 ### `GET /health`
 
@@ -345,7 +401,7 @@ curl "http://127.0.0.1:8089/realtime/transcript?seconds=30&save_audio=1"
   "anomaly_threshold": 0.10,
   "save_anomaly": 0,
   "keywords_count": 521,
-  "asr_enabled": true,
+  "asr_enabled": false,
   "asr_model_cn": "...",
   "asr_model_en": "...",
   "sox_denoise_enabled": true,
@@ -356,7 +412,14 @@ curl "http://127.0.0.1:8089/realtime/transcript?seconds=30&save_audio=1"
   "rt_amixer_enabled": true,
   "rt_amixer_card": "1",
   "rt_amixer_control": "Mic",
-  "rt_amixer_volume": "80%"
+  "rt_amixer_volume": "80%",
+  "wake_enabled": true,
+  "wake_running": false,
+  "wake_pid": -1,
+  "wake_auto_start": false,
+  "wake_command": "./wake/emergency_monitor",
+  "wake_workdir": "./wake",
+  "wake_log_path": "./wake/emergency_log.txt"
 }
 ```
 

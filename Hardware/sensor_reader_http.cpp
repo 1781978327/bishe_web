@@ -21,6 +21,8 @@
 #include <microhttpd.h>
 #include <wiringPi.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -81,6 +83,7 @@ static constexpr float VCC = 5.0f;
 static constexpr float RL = 10000.0f;
 static constexpr float ADC_FS_VOLTS = 4.096f;
 static constexpr float ADC_SCALE = ADC_FS_VOLTS / 32768.0f;
+static constexpr int ADS_MEDIAN_SAMPLE_COUNT = 5;
 
 namespace {
 
@@ -341,6 +344,24 @@ bool readAds1115Channel(int fd, uint8_t channel, int16_t& raw) {
     return i2cReadConversion(fd, raw);
 }
 
+bool readAds1115ChannelMedian(int fd, uint8_t channel, int16_t& raw) {
+    std::array<int16_t, ADS_MEDIAN_SAMPLE_COUNT> samples{};
+    int count = 0;
+
+    for (int i = 0; i < ADS_MEDIAN_SAMPLE_COUNT; ++i) {
+        int16_t sample = 0;
+        if (!readAds1115Channel(fd, channel, sample)) {
+            return false;
+        }
+        samples[count++] = sample;
+        usleep(1000);
+    }
+
+    std::sort(samples.begin(), samples.begin() + count);
+    raw = samples[count / 2];
+    return true;
+}
+
 float calculateSmokePPM(float voltage) {
     if (voltage <= 0.001f) return 0.0f;
     float rs = RL * (VCC - voltage) / voltage;
@@ -381,8 +402,8 @@ SensorSnapshot readAllSensors() {
     if (fd >= 0 && ioctl(fd, I2C_SLAVE, ADC_ADDR) >= 0) {
         int16_t raw_mq2 = 0;
         int16_t raw_light = 0;
-        bool mq2_ok = readAds1115Channel(fd, 0, raw_mq2);
-        bool light_ok = readAds1115Channel(fd, 1, raw_light);
+        bool mq2_ok = readAds1115ChannelMedian(fd, 0, raw_mq2);
+        bool light_ok = readAds1115ChannelMedian(fd, 1, raw_light);
         if (mq2_ok) {
             float voltage_mq2 = raw_mq2 * ADC_SCALE;
             snapshot.smoke = calculateSmokePPM(voltage_mq2);
