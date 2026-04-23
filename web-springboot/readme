@@ -1,31 +1,76 @@
-# web-springboot 快速说明
+# web-springboot 模块说明
 
-运行目录：
+以下说明已按当前后端源码核对。这个模块是整套系统的统一业务入口，运行目录在：
+
+- `web-springboot/demo3/demo`
+
+当前后端职责：
+
+- 对前端统一暴露 `/api`
+- 代理 3 个下游本地 HTTP 服务
+- 管理用户、摄像头、检测记录、模型、文件
+- 在异常记录落库后触发 AI 融合分析
+
+## 运行
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 ./gradlew bootRun
 ```
 
-后端入口：
+服务入口：
 
-- 端口：`8080`
-- 上下文：`/api`
-- Base URL：`http://127.0.0.1:8080/api`
+- `http://127.0.0.1:8080/api`
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:8080/api/test/health
+```
+
+说明：
+
+- 当前后端没有 `/api/status`
+- 推荐使用 `GET /api/test/health` 做启动自检
 
 ## 下游依赖
 
 | 服务 | 默认地址 | 用途 |
 |---|---|---|
 | 传感器 HTTP | `http://localhost:8088` | 环境监测 |
-| 声音 HTTP | `http://localhost:8089` | 声音检测与实时状态 |
-| RKNN HTTP | `http://localhost:8091` | 视觉推理、录像、抓帧、阈值 |
+| 声音 HTTP | `http://localhost:8089` | 声音检测、实时状态、事件窗口 |
+| RKNN HTTP | `http://localhost:8091` | 视觉推理、抓帧、录像、阈值 |
 
-这些地址都来自 `demo/src/main/resources/application.properties`。
+这些地址来自：
 
-## 当前公开接口
+- `demo3/demo/src/main/resources/application.properties`
 
-无需登录：
+## 关键配置
+
+当前默认配置里最重要的几项：
+
+```properties
+server.port=8080
+server.servlet.context-path=/api
+
+sensor.server.host=localhost
+sensor.server.port=8088
+
+sound.server.host=localhost
+sound.server.port=8089
+
+rknn.server.host=localhost
+rknn.server.port=8091
+
+ai.analysis.enabled=${AI_ANALYSIS_ENABLED:true}
+ai.analysis.base-url=${VISION_BASE_URL:https://api.866646.xyz}
+ai.analysis.api-key=${VISION_API_KEY:}
+ai.analysis.model=${RISK_MODEL:qwen3-vl:235b-instruct}
+```
+
+## 鉴权规则
+
+`SecurityConfig` 当前放行：
 
 - `/user/login`
 - `/user/register`
@@ -36,44 +81,161 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 - `/file/**`
 - `/detection/record/sound/**`
 - `/detection/record/rknn/**`
+- `/ws/**`
+- `/uploads/**`
 
 其余接口默认需要 JWT。
 
-## 用户接口现状
+## 主要接口分组
 
-当前后端真实实现的用户接口只有：
+### 测试与健康检查
+
+- `GET /test/health`
+
+### 用户
 
 - `POST /user/login`
 - `POST /user/register`
 - `POST /user/logout`
 - `PUT /user`
 
-像 `/user/page`、`/user/{id}`、`/user/password` 这些接口目前并未在后端实现。
+当前没有实现：
 
-## 常用自检
+- `/user/page`
+- `/user/{id}`
+- `/user/password`
+- `/user/{id}/reset-password`
 
-```bash
-curl http://127.0.0.1:8080/api/test/health
-curl http://127.0.0.1:8080/api/sensor/latest
-curl http://127.0.0.1:8080/api/sound/status
-curl http://127.0.0.1:8080/api/rknn/status
-```
+### 环境监测
 
-## 重要说明
+- `GET /sensor/latest`
+- `GET /sensor/history?page=0&size=20`
+- `PUT /sensor/threshold`
+- `GET /sensor/threshold`
+- `POST /sensor/refresh`
+- `PUT /sensor/monitoring?enabled=true|false`
+- `GET /sensor/monitoring`
 
-- `/api/rknn/status` 会把视觉服务返回中的 `localhost/127.0.0.1` RTSP 地址改写成当前请求主机
-- 模型管理当前支持 `best-coco-person-moto`、`coco_person_i8`、`person_2700_i8`、`yolov8s`、`yolov8n` 五个内置模型，以及上传的 `.rknn + .txt`
-- `/api/rknn/forbidden-area` 当前保存在后端内存中，重启 Spring Boot 后会清空
+代码事实：
+
+- `SensorService` 优先请求 `http://localhost:8088/sensor`
+- 传感器 HTTP 服务不可用时，会退回模拟数据
+- 阈值超限后会写入 `DetectionRecord`
+
+### 声音监测
+
+- `POST /sound/start`
+- `POST /sound/stop`
+- `GET /sound/status`
+- `GET /sound/latest`
+- `GET /sound/history?page=0&size=20`
+- `GET /sound/realtime/status`
+- `GET /sound/realtime/events`
+- `GET /sound/realtime/windows?limit=5`
+- `POST /sound/realtime/start`
+- `POST /sound/realtime/stop`
+- `POST /sound/detect`
+- `POST /sound/upload`
+- `POST /sound/record?duration=5`
+- `GET /sound/audio?path=...`
+
+代码事实：
+
+- `/sound/start` 和 `/sound/realtime/start` 最终都会调用声音服务的 `/realtime/start`
+- `/sound/upload` 在声音服务不可用时，会返回上传成功但 `anomalyCount=0`
+- 当前上传目录是硬编码路径：`/home/orangepi/Desktop/web/Sound_Monitoring/uploads`（不随仓库目录自动变化）
+
+### RKNN 视觉代理
+
+- `POST /rknn/inference/on?track=true|false&tracker=bytetrack|deepsort`
+- `POST /rknn/inference/off`
+- `POST /rknn/tracker/set?enabled=true|false`
+- `POST /rknn/rtsp/camera/start`
+- `GET /rknn/record/status`
+- `POST /rknn/record/start?cameraId=1|2`
+- `POST /rknn/record/stop?cameraId=1|2`
+- `GET /rknn/record/files?cameraId=1|2`
+- `GET /rknn/record/file?name=...`
+- `GET /rknn/status`
+- `POST /rknn/threshold/set?value=0.6&boxCount=3`
+- `GET /rknn/frame/current?cameraId=1|2&track=true|false`
+- `POST /rknn/forbidden-area`
+- `GET /rknn/forbidden-area?cameraId=1|2`
+- `GET /rknn/detection/count?cam=0|1`
+
+代码事实：
+
+- `cameraId=1` 会映射成视觉服务 `cam=0`
+- `cameraId=2` 会映射成视觉服务 `cam=1`
+- `/rknn/status` 会改写 `rtsp_url_cam0`、`rtsp_url_cam1`、`rtsp_url_mosaic`、`rtsp_url_video` 的主机名
+- `/rknn/forbidden-area` 当前保存在后端内存里，重启后会丢失
+
+### 模型管理
+
+- `GET /model/list`
+- `GET /model/current`
+- `POST /model/select?id=...`
+
+当前内置模型：
+
+- `best-coco-person-moto`
+- `coco_person_i8`
+- `person_2700_i8`
+- `yolov8s`
+- `yolov8n`
+
+上传模型规则：
+
+- 通过 `/file/upload/models`
+- 需要 `.rknn` 与同名 `.txt`
+- 后端切换时会把绝对路径下发给视觉服务
+
+### 文件服务
+
+- `POST /file/upload/{bucket}`
+- `GET /file/{bucket}/**`
+- `DELETE /file/{bucket}/**`
+
+当前常见 bucket：
+
+- `avatars`
+- `models`
+- `detection`
+- `process`
+
+### 摄像头与检测记录
+
+- `POST /camera`
+- `GET /camera`
+- `GET /camera/{id}`
+- `PUT /camera/{id}`
+- `DELETE /camera/{id}`
+- `PUT /camera/{id}/enable`
+- `PUT /camera/{id}/detection`
+- `PUT /camera/{id}/status`
+- `POST /camera/{id}/heartbeat`
+- `GET /camera/online`
+- `GET /camera/detection-enabled`
+
+- `POST /detection/record`
+- `GET /detection/record/page`
+- `GET /detection/record/{id}`
+- `PUT /detection/record/process`
+- `PUT /detection/record/{id}/process`
+- `DELETE /detection/record/{id}`
+- `DELETE /detection/record/batch`
+- `DELETE /detection/record/clear-all`
+- `POST /detection/record/rknn/report`
+- `POST /detection/record/sound/report`
 
 ## AI 融合分析
 
-当前后端已经接入统一的 `DetectionRecord` 异步 AI 融合分析：
+当前后端已经内置自动 AI 融合分析链路：
 
-- 任意一条视频、声音、环境异常记录落库后
-- 后端会异步汇总三个服务的最新上下文
-- 分析结果回写到同一条安全记录
+- 视频、声音、环境三类异常写入 `detection_records` 后自动异步触发
+- 分析结果回写到原始安全记录
 
-当前实际聚合的内容：
+当前会聚合：
 
 - 触发记录本身
 - 最近 `2` 条传感器历史
@@ -83,12 +245,14 @@ curl http://127.0.0.1:8080/api/rknn/status
 - 视觉状态与两路检测计数
 - 记录自带图片，或尽量抓取当前帧补图
 
-当前不是：
+当前不会：
 
-- 不会为 AI 额外录一段新的当前音频文件
-- 不会新建一条单独的“AI 记录”
+- 额外录一段新的现场音频再送模型
+- 新建单独的 “AI 记录”
 
-启动前建议设置：
+## AI 环境变量
+
+建议在启动前设置：
 
 ```bash
 export VISION_API_KEY='你的 key'
@@ -96,24 +260,16 @@ export VISION_BASE_URL='https://api.866646.xyz/'
 export RISK_MODEL='qwen3-vl:235b-instruct'
 ```
 
-如果你主要用根目录的一键脚本启动，也可以把这几个变量写到本地文件：
+如果使用根目录一键脚本，也可以把它们写到：
+
+- `/home/orangepi/Desktop/web/bishebeifen-master/.runtime/ai.env`
+
+## 常用自检
 
 ```bash
-/home/orangepi/Desktop/web/bishebeifen-master/.runtime/ai.env
-```
-
-内容示例：
-
-```bash
-VISION_API_KEY='你的 key'
-VISION_BASE_URL='https://api.866646.xyz/'
-RISK_MODEL='qwen3-vl:235b-instruct'
-```
-
-`start_all_stack.sh` 现在会自动加载这个文件。
-
-如果改了这些环境变量，而后端已经在运行，建议重启后端；使用 `./gradlew bootRun` 时，必要时先执行：
-
-```bash
-./gradlew --stop
+curl http://127.0.0.1:8080/api/test/health
+curl http://127.0.0.1:8080/api/sensor/latest
+curl http://127.0.0.1:8080/api/sound/status
+curl http://127.0.0.1:8080/api/sound/realtime/windows?limit=5
+curl http://127.0.0.1:8080/api/rknn/status
 ```

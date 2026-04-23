@@ -1,18 +1,15 @@
 # web-vue 前端说明
 
-当前前端基于 `Vue 3 + TypeScript + Vite + Element Plus`，主职责是：
+以下说明已按当前前端代码核对。这个模块基于 `Vue 3 + TypeScript + Vite + Element Plus`，当前主要负责：
 
 - 登录与基础页面路由
 - 环境监测展示
-- 监控页播放视觉流并控制推理/录像
+- 声音检测与声音上传
+- 监控页展示视觉流并控制推理 / 跟踪 / 录像
 - 检测记录查询与处理
 - 模型上传与切换
 
-前端默认把 Spring Boot 作为主 API 入口，基地址优先取：
-
-- `VITE_API_BASE_URL`
-- `VITE_API_URL`
-- 默认值 `/api`
+当前前端不直接访问 3 个底层 HTTP 程序，而是统一走 Spring Boot `/api`，播放视频时再根据后端返回的 RTSP 地址转换成 `WHEP` 或 `HLS`。
 
 ## 启动
 
@@ -22,11 +19,26 @@ npm install
 npm run dev -- --host 0.0.0.0 --port 3000
 ```
 
+说明：
+
+- `vite.config.ts` 当前固定开发端口为 `3000`
+- 根目录 `start_all_stack.sh` 使用 `npm run dev -- --host 0.0.0.0` 启动，端口仍来自 `vite.config.ts`
+
 构建：
 
 ```bash
 npm run build
 ```
+
+## API 基地址
+
+前端主 API 基地址优先读取：
+
+- `VITE_API_BASE_URL`
+- `VITE_API_URL`
+- 默认值 `/api`
+
+也就是说，在开发环境下默认走 Vite 代理，在部署环境下可直接指向远端后端。
 
 ## Vite 代理
 
@@ -35,8 +47,8 @@ npm run build
 | 前缀 | 转发目标 | 说明 |
 |---|---|---|
 | `/api` | `http://localhost:8080` | 当前主后端 |
-| `/algo` | `http://localhost:5000` | 历史算法代理，现主链路未使用 |
-| `/file` | `http://localhost:5001` | 历史文件代理，现主链路通常直接走 `/api/file` |
+| `/algo` | `http://localhost:5000` | 历史算法代理，当前主链路未使用 |
+| `/file` | `http://localhost:5001` | 历史文件代理，当前主链路通常直接走 `/api/file` |
 
 ## 当前有效路由
 
@@ -45,17 +57,17 @@ npm run build
 | `/login` | 登录页 | 无需登录 |
 | `/register` | 注册页 | 无需登录 |
 | `/dashboard` | 首页 | 环境监测、声音监测、视觉统计 |
-| `/profile` | 个人中心 | 头像上传、个人资料修改 |
+| `/profile` | 个人中心 | 头像上传、资料修改 |
 | `/monitor` | 监控管理 | 摄像头列表、推理开关、录像、模型切换 |
 | `/detection/record` | 检测记录管理 | 查询、处理、删除安全记录 |
 | `/model/upload` | 上传模型 | 上传 `.rknn + .txt` 并切换模型 |
 | `/admin` | 管理控制台 | 管理员首页 |
-| `/admin/users` | 用户管理 | 依赖遗留用户管理接口，当前后端未完全实现 |
+| `/admin/users` | 用户管理 | 依赖历史用户接口，当前后端未完全实现 |
 
 补充：
 
-- 当前 `/camera` 路由会直接重定向到 `/dashboard`
-- `SoundMonitoring.vue`、`camera/index.vue`、`user/index.vue` 组件仍在仓库里，但不属于当前主路由链路
+- 当前 `/camera` 路由会重定向到 `/dashboard`
+- `SoundMonitoring.vue`、`camera/index.vue`、`user/index.vue` 等旧组件仍在仓库里，但不属于主路由链路
 
 ## 环境变量
 
@@ -65,10 +77,10 @@ npm run build
 | `VITE_API_URL` | `/api` | 主后端地址备用 |
 | `VITE_FILE_URL` | 跟随主后端 | 文件接口地址，可单独覆盖 |
 | `VITE_STREAM_PROTOCOL` | `webrtc` | 流播放协议，支持 `webrtc` 或 `hls` |
-| `VITE_WEBRTC_BASE_URL` | `http://<当前页面主机>:8889` | WHEP 基地址，通常无需手写 |
+| `VITE_WEBRTC_BASE_URL` | 自动推断 | WHEP 基地址，通常无需手写 |
 | `VITE_STREAM_HOST` | 空 | 强制覆盖流媒体主机 |
-| `VITE_ALGO_URL` | 空 | `AlgoHealthCheck` 组件的独立算法地址 |
-| `VITE_ALGO_WS_URL` | 空 | 旧 WebSocket 检测链路，未配置时自动禁用 |
+| `VITE_ALGO_URL` | 空 | 历史算法地址 |
+| `VITE_ALGO_WS_URL` | 空 | 历史 WebSocket 检测链路 |
 
 ## 播放链路
 
@@ -76,11 +88,11 @@ npm run build
 
 - 默认协议是 `webrtc`
 - 若 `VITE_STREAM_PROTOCOL=hls`，则改为 HLS
-- 前端会把后端返回的 `rtsp://<host>:8554/camX` 自动转换成
+- 前端会把后端返回的 `rtsp://<host>:8554/camX` 自动转换成：
   - HLS：`http://<host>:8888/camX/index.m3u8`
   - WHEP：`http://<host>:8889/camX/whep`
 
-正常情况下不需要再手写 `VITE_WEBRTC_BASE_URL`。只有 WebRTC 部署在另一台机器时，才建议单独指定。
+正常情况下不需要手写 `VITE_WEBRTC_BASE_URL`。只有流媒体与前端不在同一台机器时，才需要显式覆盖。
 
 ## 请求封装
 
@@ -92,15 +104,10 @@ npm run build
 
 ### `src/api/file_request.ts`
 
-- 文件上传/读取/删除封装
-- 仍然从 `localStorage.userInfo.token` 附带认证头
-- 当前常用 bucket
-  - `avatars`
-  - `models`
-  - `detection`
-  - `process`
+- 文件上传 / 读取 / 删除封装
+- 同样会从 `localStorage.userInfo.token` 附带认证头
 
-## 页面与 HTTP 对照
+## 页面与后端接口对照
 
 ### 首页 `/dashboard`
 
@@ -116,6 +123,7 @@ npm run build
 - `POST /api/sound/stop`
 - `GET /api/sound/status`
 - `POST /api/sound/upload`
+- `GET /api/rknn/status`
 - `GET /api/rknn/detection/count?cam=0|1`
 
 ### 监控页 `/monitor`
@@ -123,8 +131,8 @@ npm run build
 主要调用：
 
 - `GET /api/camera`
-- `GET /api/detection/record/page`
 - `GET /api/model/list`
+- `GET /api/model/current`
 - `POST /api/model/select?id=...`
 - `GET /api/rknn/status`
 - `POST /api/rknn/inference/on`
@@ -152,16 +160,13 @@ npm run build
 - `GET /api/camera`
 - `GET /api/sound/audio?path=...`
 
-当前页面真实行为补充：
+页面行为补充：
 
-- 详情页会显示同一条安全记录的 `AI 融合分析`
-- 前端读取的字段包括
+- 详情页会展示 `AI 融合分析`
+- 前端当前会读取：
   - `aiAnalysisStatus`
   - `aiAnalysisResult`
   - `aiAnalysisTime`
-- 声音记录详情默认显示声音信息与音频播放器
-- 视频记录详情默认显示检测图像
-- 如果声音记录想显示图片，前提是后端该条记录本身带了 `imageUrl`
 
 ### 个人中心 `/profile`
 
@@ -180,10 +185,10 @@ npm run build
 - `GET /api/model/current`
 - `POST /api/model/select?id=...`
 
-## 当前代码里的遗留点
+## 当前遗留点
 
-- `src/api/user.ts` 仍有 `/user/page`、`/user/{id}`、`/user/password`、`/user/{id}/reset-password` 等封装
-- 当前 Spring Boot 实际只实现了
+- `src/api/user.ts` 仍保留 `/user/page`、`/user/{id}`、`/user/password` 等老接口封装
+- 当前 Spring Boot 实际只实现了：
   - `POST /user/login`
   - `POST /user/register`
   - `POST /user/logout`
@@ -194,8 +199,9 @@ npm run build
 
 ```bash
 curl http://127.0.0.1:8080/api/test/health
-curl http://127.0.0.1:8080/api/rknn/status
 curl http://127.0.0.1:8080/api/sensor/latest
+curl http://127.0.0.1:8080/api/sound/status
+curl http://127.0.0.1:8080/api/rknn/status
 ```
 
 如果监控页播放异常，优先检查：

@@ -1,391 +1,259 @@
 # 嵌入式多目标追踪与智能预警系统
 
-以 HTTP 联调为主线的校园安全监测项目。当前代码里的主链路是：
+本项目是一个基于RK3588平台的嵌入式多目标追踪与智能预警系统，融合了环境监测、声音检测、视觉识别等多种技术，构建了一个全方位的智能监控预警平台。
 
-- 浏览器访问 `web-vue`
-- 前端主要请求 Spring Boot `http://<host>:8080/api`
-- Spring Boot 再分别对接 3 个本地 HTTP 服务
-  - 环境传感器：`8088`
-  - 声音异常：`8089`
-  - RKNN 视觉：`8091`
-- 视觉服务通过 MediaMTX 继续提供 `RTSP / HLS / WebRTC(WHEP)` 流
+## 系统架构
+
+整个系统采用分层架构设计，主要包括以下三层：
+
+### 1. 硬件抽象层 (Hardware)
+- **传感器数据采集**：DHT11(温湿度)、MQ-2(烟雾)、GL5528(光照)配合ADS1115 ADC转换器
+- **HTTP服务接口**：`sensor_reader_http` (端口 8088)，提供环境数据的REST API访问
+- **底层通信**：通过I2C和GPIO接口与传感器交互
+
+### 2. 智能感知层 (Intelligent Perception)
+- **声音监测**：基于YAMNet模型的声音异常检测，`rknn_yamnet_demo_http` (端口 8089)
+- **视觉识别**：基于YOLOv8的目标检测与跟踪，`rknn_http_ctrl` (端口 8091)，支持ByteTrack/DeepSORT跟踪算法
+- **流媒体服务**：集成MediaMTX，提供RTSP/HLS/WebRTC流媒体服务
+
+### 3. 应用服务层 (Application Services)
+- **后端服务**：Spring Boot应用 (端口 8080)，统一管理各子系统
+- **前端界面**：Vue 3单页应用 (端口 3000)，提供可视化监控界面
+- **数据存储**：集成MySQL/H2数据库，存储检测记录和系统配置
+
+## 系统功能特性
+
+### 环境监测功能
+- 实时温湿度监测
+- 烟雾浓度检测
+- 光照强度监测
+- 自定义阈值报警
+- 历史数据记录
+
+### 声音检测功能
+- 音频文件异常检测
+- 实时麦克风监测
+- Vosk ASR语音转写（可选）
+- 紧急关键词唤醒监测
+- 声音事件自动上报
+
+### 视觉识别功能
+- 实时目标检测（人、车、物体等）
+- 目标跟踪与轨迹分析
+- 双路摄像头同步处理
+- 检测数量阈值报警
+- 禁入区域监测
+- JPEG抓帧与录像功能
+
+### 综合管理功能
+- 统一Web界面管理
+- 实时数据可视化
+- 历史记录查询
+- 用户权限管理
+- 系统配置管理
 
 ## 项目结构
 
-```text
+```
 bishebeifen-master/
-├── README.md
-├── web-vue/                     # Vue 3 + Vite 前端
-├── web-springboot/              # Spring Boot 后端
-├── Hardware/                    # 环境传感器 HTTP 服务
-├── Sound_Monitoring/            # 声音异常 HTTP 服务
-├── yolov8-rk3588-cpp-3-15/      # RK3588 视觉 HTTP / RTSP 服务
-├── docs/                        # 辅助接口文档
-├── start_all_stack.sh           # 一键启动脚本
-└── stop_all_stack.sh            # 一键停止脚本
+├── README.md                      # 项目主文档
+├── start_all_stack.sh            # 一键启动脚本
+├── stop_all_stack.sh             # 一键停止脚本
+├── .runtime/                     # 运行时配置目录
+├── Hardware/                     # 硬件传感器HTTP服务
+│   ├── sensor_reader_http.cpp    # 传感器数据采集服务
+│   ├── README.md                 # 硬件模块文档
+│   └── ...
+├── Sound_Monitoring/             # 声音检测HTTP服务
+│   ├── src/main_http.cc          # 声音检测服务主程序
+│   ├── README.md                 # 声音模块文档
+│   └── ...
+├── yolov8-rk3588-cpp-3-15/       # 视觉识别HTTP服务
+│   ├── src/main_http_ctrl.cc     # 视觉控制服务主程序
+│   ├── README.md                 # 视觉模块文档
+│   └── ...
+├── web-springboot/               # Spring Boot后端服务
+│   ├── demo3/demo/               # 主应用模块
+│   └── ...
+├── web-vue/                      # Vue 3前端界面
+│   ├── src/views/Dashboard.vue   # 主仪表盘界面
+│   └── ...
+├── docs/                         # 文档资料
+└── 测试大模型/                   # 第三方大模型集成测试
 ```
 
-## 当前 HTTP 拓扑
+## 服务端口分配
 
-| 调用方 | 被调用方 | 用途 |
-|---|---|---|
-| 浏览器 | `http://<host>:3000` | 访问 Vue 前端 |
-| 前端 | `http://<host>:8080/api` | 统一业务入口 |
-| Spring Boot | `http://localhost:8088` | 读取传感器 `/sensor` |
-| Spring Boot | `http://localhost:8089` | 声音检测、实时状态、实时事件 |
-| Spring Boot | `http://localhost:8091` | 视觉推理、录像、抓帧、阈值、状态 |
-| 浏览器 | `rtsp://<host>:8554/*` | RTSP 拉流 |
-| 浏览器 | `http://<host>:8888/*` | HLS 播放 |
-| 浏览器 | `http://<host>:8889/*/whep` | WebRTC(WHEP) 播放 |
+| 服务名称 | 端口 | 协议 | 功能描述 |
+|---------|------|------|----------|
+| Vue前端 | 3000 | HTTP | 用户界面访问 |
+| Spring Boot后端 | 8080 | HTTP | API网关与业务逻辑 |
+| 传感器HTTP服务 | 8088 | HTTP | 环境数据采集 |
+| 声音检测HTTP服务 | 8089 | HTTP | 音频分析与检测 |
+| 视觉识别HTTP服务 | 8091 | HTTP | 目标检测与跟踪 |
+| RTSP流媒体 | 8554 | RTSP | 视频流传输 |
+| HLS流媒体 | 8888 | HTTP | HTTP Live Streaming |
+| WebRTC流媒体 | 8889 | HTTP | WebRTC WHEP接口 |
+| WebRTC ICE | 8189 | UDP | WebRTC ICE传输 |
 
-## 端口约定
+## 快速启动指南
 
-| 服务 | 端口 | 说明 |
-|---|---:|---|
-| `web-vue` | `3000` | 前端开发服务 |
-| `web-springboot` | `8080` | 后端，带 `/api` 上下文 |
-| `sensor_reader_http` | `8088` | 传感器 HTTP 服务 |
-| `rknn_yamnet_demo_http` | `8089` | 声音 HTTP 服务 |
-| `rknn_http_ctrl` | `8091` | 视觉 HTTP 服务 |
-| MediaMTX RTSP | `8554` | RTSP |
-| MediaMTX HLS | `8888` | HLS |
-| MediaMTX WebRTC | `8889` | WHEP |
-| MediaMTX ICE | `8189/udp` | WebRTC ICE |
+### 前提条件
+- 确保RK3588开发板已正确配置
+- 硬件传感器已正确连接
+- 安装必要依赖：Node.js, Java 17, Maven/Gradle
 
-## 启动顺序
+### 一键启动（推荐）
 
-### 0. 前置依赖
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master
+./start_all_stack.sh
+```
 
-- `MySQL 8`
-- `JDK 17`
-- `Node.js 18+`
-- 板端依赖：`wiringPi`、`libmicrohttpd-dev`、OpenCV、FFmpeg、RGA、RKNN 运行库等
+### 手动启动
 
-### 1. 启动环境传感器 HTTP 服务
-
+#### 1. 启动硬件传感器服务
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/Hardware
 sudo ./sensor_reader_http
 ```
 
-自检：
-
-```bash
-curl http://127.0.0.1:8088/health
-curl http://127.0.0.1:8088/sensor
-```
-
-### 2. 启动声音 HTTP 服务
-
-推荐先编译：
-
+#### 2. 启动声音检测服务
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring
-./scripts/build.sh
-```
-
-再运行：
-
-```bash
-cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/build
+./scripts/build.sh  # 首次运行需编译
+cd build
 export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
 sudo ./rknn_yamnet_demo_http 8089
 ```
 
-说明：
-
-- `scripts/build.sh` 默认产物在 `Sound_Monitoring/build`
-- 根目录 `start_all_stack.sh` 优先尝试 `Sound_Monitoring/src/build`，如目录不同可显式设置 `SOUND_DIR`
-- 当前实时输入默认改成 `parec`，会直接跟随系统默认麦克风
-- 声音服务实时音频配置默认从 `Sound_Monitoring/config/runtime_audio.yaml` 读取；构建后会复制到 `Sound_Monitoring/build/config/runtime_audio.yaml`
-- 当前默认配置是不改硬件增益、不做 FFmpeg/SoX 额外滤波，只使用 `parec` 原始输入
-
-自检：
-
-```bash
-curl http://127.0.0.1:8089/health
-curl http://127.0.0.1:8089/realtime/status
-```
-
-### 3. 启动视觉 HTTP 服务
-
+#### 3. 启动视觉识别服务
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/yolov8-rk3588-cpp-3-15/build_release
 sudo ./rknn_http_ctrl --cam0-source /dev/video0 --cam1-source /dev/video2
 ```
 
-说明：
-
-- 推荐从 `build_release` 启动，自动拉起的 `mediamtx` 会优先读取 `build_release/mediamtx.yml`
-- 视觉服务直连端口是 `8091`
-
-自检：
-
-```bash
-curl http://127.0.0.1:8091/api/status
-```
-
-### 4. 启动 Spring Boot
-
+#### 4. 启动后端服务
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-springboot/demo3/demo
 ./gradlew bootRun
 ```
 
-后端入口：
-
-- `http://127.0.0.1:8080/api`
-
-自检：
-
-```bash
-curl http://127.0.0.1:8080/api/test/health
-curl http://127.0.0.1:8080/api/rknn/status
-```
-
-### 5. 启动前端
-
+#### 5. 启动前端服务
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/web-vue
 npm install
 npm run dev -- --host 0.0.0.0 --port 3000
 ```
 
-访问：
+## 系统访问
 
-- 本机：`http://127.0.0.1:3000`
-- 局域网：`http://<当前机器IP>:3000`
+- **前端界面**：`http://<IP>:3000`
+- **后端API**：`http://<IP>:8080/api`
+- **传感器服务**：`http://<IP>:8088`
+- **声音服务**：`http://<IP>:8089`
+- **视觉服务**：`http://<IP>:8091`
+- **RTSP流**：`rtsp://<IP>:8554/cam0`
 
-### 6. 可选：一键脚本
+## API接口概览
 
-在三类下游二进制都已准备好的前提下，可以直接使用：
+### 环境监测接口
+- `GET /api/sensor/latest` - 获取最新环境数据
+- `PUT /api/sensor/threshold` - 更新阈值设置
+- `PUT /api/sensor/monitoring` - 控制监测开关
 
+### 声音检测接口
+- `POST /api/sound/upload` - 上传音频文件检测
+- `POST /api/sound/start` - 开启实时监测
+- `GET /api/sound/status` - 获取监测状态
+
+### 视觉识别接口
+- `POST /api/rknn/inference/on` - 开启目标检测
+- `GET /api/rknn/frame/current` - 获取当前帧图像
+- `GET /api/rknn/detection/count` - 获取检测数量
+- `POST /api/rknn/forbidden-area` - 设置禁入区域
+
+## 系统监控与维护
+
+### 服务健康检查
 ```bash
-./start_all_stack.sh
-./stop_all_stack.sh
-```
-
-## 联调自检
-
-```bash
+# 检查所有服务端口
 ss -ltnup | grep -E '3000|8080|8088|8089|8091|8554|8888|8889|8189'
-curl http://127.0.0.1:8088/sensor
+
+# 检查各服务状态
+curl http://127.0.0.1:8088/health
 curl http://127.0.0.1:8089/health
 curl http://127.0.0.1:8091/api/status
 curl http://127.0.0.1:8080/api/test/health
 ```
 
-打开视觉推理与推流：
-
+### 开启视觉推理与流媒体
 ```bash
+# 开启目标检测
 curl -X POST "http://127.0.0.1:8080/api/rknn/inference/on?track=true&tracker=bytetrack"
+
+# 开启RTSP推流
 curl -X POST "http://127.0.0.1:8080/api/rknn/rtsp/camera/start"
 ```
 
-## 主要业务入口
-
-### 后端主要入口
-
-- `POST /api/user/login`
-- `POST /api/user/register`
-- `POST /api/user/logout`
-- `PUT /api/user`
-- `GET/PUT/POST /api/sensor/*`
-- `GET/POST /api/sound/*`
-- `GET/POST /api/rknn/*`
-- `GET/POST /api/model/*`
-- `GET/POST/DELETE /api/file/*`
-- `GET/PUT/DELETE /api/detection/record/*`
-
-### 视觉链路
-
-- 视觉服务 RTSP
-  - `rtsp://<host>:8554/cam0`
-  - `rtsp://<host>:8554/cam1`
-  - `rtsp://<host>:8554/cam2`
-  - `rtsp://<host>:8554/cam3`
-- 前端默认会把 RTSP 地址自动转换成 WHEP 地址
-  - `http://<host>:8889/cam0/whep`
-  - `http://<host>:8889/cam1/whep`
-  - `http://<host>:8889/cam2/whep`
-
-### 模型管理
-
-当前后端内置模型：
-
-- `best-coco-person-moto`
-- `coco_person_i8`
-- `person_2700_i8`
-- `yolov8s`
-- `yolov8n`
-
-上传模型仍走 `.rknn + 同名 .txt` 配对方式，选择模型时由后端把绝对路径下发给视觉服务。
-
-## 前端现状说明
-
-- 当前主路由：`/login`、`/register`、`/dashboard`、`/profile`、`/monitor`、`/detection/record`、`/model/upload`、`/admin`、`/admin/users`
-- 监控页默认播放协议是 `WebRTC`，不是 `HLS`
-- `camera/index.vue` 组件仍存在，但当前 `/camera` 路由会直接重定向到 `/dashboard`
-- `src/api/user.ts` 里还保留了 `/user/page`、`/user/{id}`、`/user/password` 等历史封装；当前后端并没有实现这些接口，现网主链路只包括登录、注册、退出和个人信息更新
-
-## 代码里的几个真实细节
-
-- `SensorService` 在 `8088` 传感器服务不可用时，会退回到模拟数据
-- `/api/rknn/forbidden-area` 当前存储在后端内存中，Spring Boot 重启后会清空
-- `/api/rknn/status` 会把视觉服务返回里的 `localhost/127.0.0.1` RTSP 地址改写成当前请求主机，便于前端直接播放
-- 录像真正落盘在视觉服务目录，Spring Boot 只负责代理状态、列表和下载
-
-## AI 融合分析
-
-当前后端已经接入“异常落库后自动触发 AI 融合分析”的链路。
-
-### 触发方式
-
-以下三类异常写入 `detection_records` 后，会自动异步触发 AI：
-
-- 视频类异常上报
-- 声音类异常上报
-- 环境类异常记录
-
-AI 不是新建一条独立记录，而是把分析结果回写到原来的安全记录里。
-
-### 当前聚合的数据
-
-后端会按当前代码汇总：
-
-- 触发异常记录本身
-- 最近 `2` 条传感器历史
-- 当前传感器阈值
-- 最近 `5` 个声音实时窗口
-- 声音实时状态与实时异常事件
-- 视觉状态与两路检测计数
-- 记录自带图片；如果记录没有图片，则尽量抓当前帧补图
-
-说明：
-
-- 当前不会为了 AI 额外录制一段“新的当前音频文件”
-- 声音上下文主要来自声音服务实时窗口与事件接口
-
-### 配置
-
-启动 Spring Boot 前建议先设置：
-
+### 一键停止服务
 ```bash
-export VISION_API_KEY='你的 key'
-export VISION_BASE_URL='https://api.866646.xyz/'
-export RISK_MODEL='qwen3-vl:235b-instruct'
+./stop_all_stack.sh
 ```
 
-如果你平时通过根目录脚本启动，当前也可以直接把这些变量写到本地文件：
+## 开发说明
 
-```bash
-/home/orangepi/Desktop/web/bishebeifen-master/.runtime/ai.env
-```
+### 代码组织
+- **前端**：Vue 3 + TypeScript + Element Plus，使用组件化开发
+- **后端**：Spring Boot + Spring Security + JPA，RESTful API设计
+- **底层服务**：C++编写；传感器服务基于microhttpd，声音与视觉服务使用自建socket HTTP服务
 
-例如：
+### 主要业务流程
+1. 硬件传感器持续采集环境数据并通过HTTP API暴露
+2. 后端定时拉取传感器数据并进行阈值比较
+3. 视觉模块进行实时目标检测和跟踪
+4. 声音模块进行音频异常检测
+5. 所有异常事件统一上报并记录
+6. 前端实时展示所有监控数据和报警信息
 
-```bash
-VISION_API_KEY='你的 key'
-VISION_BASE_URL='https://api.866646.xyz/'
-RISK_MODEL='qwen3-vl:235b-instruct'
-```
+## 技术栈
 
-`start_all_stack.sh` 会自动加载这个文件，所以日常只需要执行：
+- **硬件平台**：RK3588开发板
+- **前端**：Vue 3, TypeScript, Element Plus, Vite
+- **后端**：Spring Boot 3.2, Java 17, MySQL/H2, JWT, Spring Security
+- **视觉**：YOLOv8, RKNN, ByteTrack, OpenCV
+- **声音**：YAMNet, Vosk ASR
+- **通信**：HTTP/REST, RTSP, HLS, WebRTC
+- **容器/部署**：MediaMTX流媒体服务器
 
-```bash
-./start_all_stack.sh
-```
+## 常见问题
 
-如果你不是用 `start_all_stack.sh`，而是手动启动或重启 Spring Boot，需要先把这个文件加载进当前 shell，再启动后端：
+### 硬件相关
+- 检查I2C和GPIO权限，确保以sudo运行
+- 确认传感器连接正确，地址匹配
 
-```bash
-cd /home/orangepi/Desktop/web/bishebeifen-master
-set -a
-source .runtime/ai.env
-set +a
-cd web-springboot/demo3/demo
-./gradlew bootRun
-```
+### 服务启动
+- 确保按照依赖顺序启动服务
+- 检查端口占用情况
+- 验证环境变量配置
 
-如果只改了 `.runtime/ai.env` 里的 `VISION_API_KEY` / `VISION_BASE_URL` / `RISK_MODEL`，但后端没有重启，那么运行中的 Spring 进程不会自动拿到新值，AI 融合分析仍然可能显示“未配置 VISION_API_KEY”。
+### 性能优化
+- RK3588平台可充分利用NPU加速
+- 根据实际需求调整检测频率和阈值
+- 合理配置流媒体服务参数
 
-对应的后端配置项在 `application.properties`：
+## 贡献
 
-- `ai.analysis.enabled`
-- `ai.analysis.base-url`
-- `ai.analysis.api-key`
-- `ai.analysis.model`
-- `ai.analysis.sensor-history-size`
-- `ai.analysis.sound-window-limit`
+欢迎提交Issue和Pull Request。对于重大变更，请先开Issue讨论您想要改变的内容。
 
-注意：
+## 许可证
 
-- 这些环境变量需要在后端启动前就存在
-- 如果你改了 `VISION_API_KEY` 但后端已经在跑，最好重启后端；如果是用 `./gradlew bootRun`，必要时先执行一次 `./gradlew --stop`
+本项目为毕业设计项目，仅供学习交流使用。
 
-### 前端显示
+## 相关文档
 
-前端“安全记录”详情页现在会显示：
-
-- `aiAnalysisStatus`
-- `aiAnalysisResult`
-- `aiAnalysisTime`
-
-也就是同一条安全记录里同时保留：
-
-- 原始异常信息
-- 图片或音频信息
-- AI 融合分析结论
-
-### 快速模拟区域闯入
-
-如果暂时不方便做真实禁入区闯入，可以直接构造一条 `env_intrusion` 上报：
-
-```bash
-python3 - <<'PY'
-import base64, json
-from pathlib import Path
-
-img = Path('/home/orangepi/Desktop/web/bishebeifen-master/测试大模型/R-C.jpg').read_bytes()
-payload = {
-    "cameraId": 1,
-    "detectionResult": json.dumps({
-        "type": "env_intrusion",
-        "cam": 0,
-        "hitCount": 1,
-        "zonePoints": [
-            {"x": 160, "y": 120},
-            {"x": 480, "y": 120},
-            {"x": 480, "y": 400},
-            {"x": 160, "y": 400}
-        ],
-        "objects": [
-            {
-                "label": "person",
-                "cls": 0,
-                "score": 0.93,
-                "center": {"x": 320, "y": 260},
-                "box": {"x1": 240, "y1": 120, "x2": 400, "y2": 420}
-            }
-        ]
-    }, ensure_ascii=False),
-    "imageBase64": base64.b64encode(img).decode("utf-8")
-}
-Path('/tmp/env_intrusion_test.json').write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
-PY
-
-curl -X POST http://127.0.0.1:8080/api/detection/record/rknn/report \
-  -H 'Content-Type: application/json' \
-  --data-binary @/tmp/env_intrusion_test.json
-```
-
-然后去前端“安全记录”里查看这条记录的图片、原始 `env_intrusion` 数据和 AI 融合分析结果。
-
-## 模块 README
-
-- `web-vue/README`
-- `web-springboot/readme`
-- `web-springboot/demo3/demo/README.md`
-- `Hardware/README.md`
-- `Sound_Monitoring/README.md`
-- `yolov8-rk3588-cpp-3-15/README.md`
+- `Hardware/README.md` - 硬件模块详细说明
+- `Sound_Monitoring/README.md` - 声音模块详细说明  
+- `yolov8-rk3588-cpp-3-15/README.md` - 视觉模块详细说明
+- `web-springboot/readme` - 后端服务说明
+- `web-vue/README` - 前端开发说明

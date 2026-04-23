@@ -1,20 +1,19 @@
-# Hardware 传感器 HTTP 服务说明
+# Hardware 传感器 HTTP 服务
 
-当前环境监测主链路使用 `sensor_reader_http.cpp`，运行产物是 `sensor_reader_http`，固定端口 `8088`。
+以下说明已按当前源码核对，真实 HTTP 入口是 `sensor_reader_http.cpp`，运行产物是 `sensor_reader_http`，固定监听 `8088`。
 
-服务负责读取：
+它负责把板端环境数据以 JSON 方式暴露给 Spring Boot：
 
 - `DHT11`：温度、湿度
-- `MQ-2`：烟雾
-- `GL5528`：光照
-- `ADS1115`：ADC 采样
+- `ADS1115 + MQ-2`：烟雾近似值
+- `ADS1115 + GL5528`：光照近似值
 
-Spring Boot 默认通过 `http://localhost:8088` 访问它。
+Spring Boot 默认通过 `http://localhost:8088` 调用本服务。
 
 ## 硬件映射
 
-- `DHT11` 数据脚：`wiringPi pin 2`，物理引脚 `7`
-- `ADS1115`：`/dev/i2c-1`
+- `DHT11` 数据脚：`wiringPi pin 2`，对应物理引脚 `7`
+- `ADS1115` 设备：`/dev/i2c-1`
 - `ADS1115` 地址：`0x48`
 - `MQ-2`：`AIN0`
 - `GL5528`：`AIN1`
@@ -27,25 +26,26 @@ sudo apt install wiringpi libmicrohttpd-dev
 
 同时需要确认：
 
-- 已启用 `I2C1`
-- 系统存在 `/dev/i2c-1`
-- 运行用户有 GPIO/I2C 权限，通常直接用 `sudo`
+- 系统已启用 `I2C1`
+- 板端存在 `/dev/i2c-1`
+- 运行用户具有 GPIO / I2C 权限，通常直接使用 `sudo`
 
 ## 编译
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/Hardware
-g++ -std=c++17 -O2 -Wall sensor_reader_http.cpp -o sensor_reader_http -lwiringPi -lmicrohttpd
+g++ -std=c++17 -O2 -Wall sensor_reader_http.cpp -o sensor_reader_http \
+  -lwiringPi -lmicrohttpd -pthread
 ```
 
 说明：
 
-- 仓库里已经存在一个已编译的 `sensor_reader_http`
-- 但能否直接运行仍取决于当前板卡环境和库版本
+- 仓库里已经包含一个已编译的 `sensor_reader_http`
+- 能否直接运行，仍取决于当前板卡环境和库版本
 
 ## 启动
 
-前台：
+前台运行：
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/Hardware
@@ -75,7 +75,7 @@ sudo ./sensor_reader_http --daemon
 
 ### `GET /health`
 
-返回健康状态和最近一次读取时间：
+返回健康状态与当前缓存快照的时间戳：
 
 ```json
 {
@@ -86,7 +86,7 @@ sudo ./sensor_reader_http --daemon
 
 ### `GET /sensor`
 
-每次请求都会立即读取一次最新数据：
+每次请求都会立即重新读取一次硬件，再刷新全局快照：
 
 ```json
 {
@@ -97,25 +97,19 @@ sudo ./sensor_reader_http --daemon
 }
 ```
 
-代码事实：
-
-- `/sensor` 内部会先执行一次 `readAllSensors()`
-- 主循环也会每秒刷新一次全局缓存
-- 读取失败时，相关字段可能返回 `-1`
-
-### 其他行为
+## 代码事实
 
 - 仅支持 `GET`
-- 非 `GET` 返回 `405`
 - 未知路径返回 `404`
-- 响应头放开了 `Access-Control-Allow-Origin: *`
-
-## 运行细节
-
-- 启动时会先预热一次硬件读取
-- DHT11 当前按照约 `1Hz` 节奏轮询
-- `MQ-2` 通过电压估算近似 `ppm`
-- 光照当前使用简单线性换算 `voltage * 200`
+- 非 `GET` 请求返回 `405`
+- 响应头固定带 `Access-Control-Allow-Origin: *`
+- 服务启动时会先预热一次传感器读取
+- 后台线程会按约 `1Hz` 刷新一次缓存
+- `/sensor` 不仅读缓存，而是会主动再采一轮最新数据
+- DHT11 本次读取失败，但上一次温湿度有效时，代码会继续沿用上一份温湿度
+- 当前代码里，如果湿度低于 `30%`，会被随机修正到 `30.0~31.0`
+- 烟雾值来自 `MQ-2` 电压换算的近似 `ppm`
+- 光照值当前是 `voltage * 200` 的简单线性换算
 
 ## 与 Spring Boot 的联动
 
@@ -131,7 +125,11 @@ sensor.server.port=8088
 sensor.poll.interval-ms=1000
 ```
 
-后端会优先请求本服务；若本服务不可用，`SensorService` 会回退到模拟数据。
+代码行为：
+
+- Spring Boot 优先请求 `http://localhost:8088/sensor`
+- 如果本服务不可用，`SensorService` 会退回到模拟数据
+- 传感器阈值超限后，后端会写入 `DetectionRecord`
 
 ## 自检
 
@@ -160,6 +158,6 @@ ss -ltnp | grep 8088
 
 优先检查：
 
-- `ADS1115` 是否被识别
+- `ADS1115` 是否被系统识别
 - 地址是否真的是 `0x48`
 - `AIN0 / AIN1` 接线是否正确
