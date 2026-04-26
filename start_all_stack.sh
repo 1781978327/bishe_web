@@ -393,7 +393,7 @@ cleanup_vision_residuals
 start_service "frontend" "user" "$FRONTEND_DIR" "npm run dev -- --host 0.0.0.0"
 wait_for_http_ready "frontend" "http://127.0.0.1:3000" "" '^200$' 40
 start_service "backend" "user" "$BACKEND_DIR" "./gradlew bootRun"
-wait_for_http_ready "backend" "http://127.0.0.1:8080/api/status" "" '^(200|401|403)$' 80
+wait_for_http_ready "backend" "http://127.0.0.1:8080/api/test/health" "" '^200$' 80
 start_service "sensor_http" "sudo" "$SENSOR_DIR" "./sensor_reader_http"
 wait_for_http_ready "sensor_http" "http://127.0.0.1:8088/health" '"status": "ok"' '^200$' 40
 SOUND_HTTP_CMD="env LD_LIBRARY_PATH=./lib:\$LD_LIBRARY_PATH \
