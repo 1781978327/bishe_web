@@ -60,6 +60,20 @@
       </div>
       <div class="right">
         <el-button-group>
+          <el-button @click="openVideoSourceDialog" plain>
+            <el-icon><FolderOpened /></el-icon>
+            视频/拉流
+          </el-button>
+          <el-tooltip
+            v-if="videoSourceActive"
+            content="停止当前视频/拉流源并恢复摄像头模式"
+            placement="top"
+          >
+            <el-button type="danger" plain :loading="videoSourceLoading" @click="handleStopVideoSource(false)">
+              <el-icon><VideoPause /></el-icon>
+              停止视频源
+            </el-button>
+          </el-tooltip>
           <el-tooltip content="目标检测阈值设置" placement="top">
             <el-button @click="thresholdSettingsVisible = true" type="primary" plain>
               <el-icon><Setting /></el-icon>
@@ -82,7 +96,10 @@
       <!-- 左侧：摄像头视频区域 -->
       <div class="video-panel">
         <div class="panel-header">
-          <h3>校园安全监控</h3>
+          <div class="panel-title-group">
+            <h3>校园安全监控</h3>
+            <el-tag v-if="videoSourceActive" type="warning" effect="dark">视频/拉流模式</el-tag>
+          </div>
           <div class="panel-actions">
             <el-select
               v-model="selectedRecordingCameraId"
@@ -145,9 +162,9 @@
         <div class="video-grid" :class="'grid-' + layout" :style="{ overflow: showScrollbar ? 'auto' : 'hidden' }">
           <template v-if="displayCameras.length > 0">
             <div v-for="camera in displayCameras" :key="camera.id" class="video-item">
-              <div class="video-wrapper">
-                <div class="video-controls">
-                  <el-tooltip content="移除此摄像头" placement="top" effect="dark">
+                <div class="video-wrapper">
+                  <div class="video-controls">
+                  <el-tooltip v-if="!isVideoSourceCamera(camera)" content="移除此摄像头" placement="top" effect="dark">
                     <el-button
                       class="remove-camera-btn"
                       type="danger"
@@ -158,11 +175,11 @@
                       <el-icon><Close /></el-icon>
                     </el-button>
                   </el-tooltip>
-                </div>
-                <VideoPlayer
-                  :camera="camera"
-                  :is-active="isActiveCamera(camera.id)"
-                  :server-draw-enabled="serverDrawEnabled"
+                  </div>
+                  <VideoPlayer
+                    :camera="camera"
+                    :is-active="isActiveCamera(camera.id)"
+                    :server-draw-enabled="serverDrawEnabled"
                   @click="handleCameraClick"
                 />
               </div>
@@ -491,6 +508,117 @@
       </div>
     </el-dialog>
 
+    <el-dialog
+      v-model="videoSourceDialogVisible"
+      title="视频上传 / 拉流推理"
+      width="680px"
+      destroy-on-close
+    >
+      <div class="video-source-form">
+        <el-alert
+          v-if="videoSourceActive"
+          type="success"
+          show-icon
+          :closable="false"
+          title="当前正在使用视频/拉流源"
+          :description="videoSourceStatus.videoPath || videoSourceStatus.rtspUrl || '视觉服务已处于视频模式'"
+        />
+
+        <el-form label-width="110px" label-position="left">
+          <el-form-item label="源类型">
+            <el-radio-group v-model="videoSourceMode">
+              <el-radio-button :value="'upload'">上传视频</el-radio-button>
+              <el-radio-button :value="'stream'">拉流地址</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+
+          <el-form-item v-if="videoSourceMode === 'upload'" label="视频文件">
+            <el-upload
+              v-model:file-list="videoUploadFiles"
+              :auto-upload="false"
+              :limit="1"
+              accept=".mp4,.mov,.avi,.mkv,.flv,.ts,.m4v,.webm"
+              :on-change="handleVideoFileChange"
+              :on-remove="handleVideoFileRemove"
+            >
+              <el-button type="primary" plain>
+                选择视频文件
+              </el-button>
+              <template #tip>
+                <div class="video-upload-tip">
+                  支持 `mp4 / mov / avi / mkv / flv / ts / m4v / webm`，当前后端上传上限为 200MB。
+                </div>
+              </template>
+            </el-upload>
+            <div v-if="uploadedVideoInfo" class="video-uploaded-meta">
+              已上传：{{ uploadedVideoInfo.fileName }}
+            </div>
+          </el-form-item>
+
+          <el-form-item v-else label="流地址">
+            <el-input
+              v-model="videoStreamUrl"
+              clearable
+              placeholder="例如 rtsp://127.0.0.1:8554/stream 或 http://..."
+            />
+            <div class="video-upload-tip">
+              视觉服务底层支持 `rtsp / rtmp / http / https / udp / tcp` 形式的视频源地址。
+            </div>
+          </el-form-item>
+
+          <el-form-item label="循环播放" v-if="videoSourceMode === 'upload'">
+            <el-switch v-model="videoSourceLoop" />
+          </el-form-item>
+
+          <el-form-item label="开启推理">
+            <el-switch v-model="videoAutoInference" />
+          </el-form-item>
+
+          <el-form-item label="开启跟踪">
+            <el-switch v-model="videoAutoTrack" :disabled="!videoAutoInference" />
+          </el-form-item>
+
+          <el-form-item label="跟踪算法">
+            <el-select
+              v-model="trackerBackend"
+              class="tracker-select"
+              :disabled="!videoAutoInference || !videoAutoTrack"
+            >
+              <el-option label="ByteTrack" value="bytetrack" />
+              <el-option label="DeepSORT" value="deepsort" />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="当前 RTSP">
+            <span class="source-path-text">
+              {{ currentVideoSourceRtspUrl }}
+            </span>
+            <div class="video-upload-tip">
+              上传视频后默认开启推理、跟踪和视频推流，前端优先拉取 {{ buildDefaultRtspUrl('cam3') }}。
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="videoSourceDialogVisible = false">取消</el-button>
+          <el-button
+            v-if="videoSourceActive"
+            type="danger"
+            plain
+            :loading="videoSourceLoading"
+            @click="handleStopVideoSource(true)"
+          >
+            停止并恢复摄像头
+          </el-button>
+          <el-button type="primary" :loading="videoSourceLoading" @click="handleStartVideoSource">
+            {{ videoSourceMode === 'upload' ? '上传并启动' : '启动拉流推理' }}
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
     <!-- 短信通知设置对话框 -->
     <el-dialog
       v-model="smsSettingsVisible"
@@ -696,10 +824,13 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import type { UploadProps, UploadUserFile } from 'element-plus'
 import type { Camera } from '@/types/camera'
 import { getCameraList } from '@/api/camera'
+import { getVideoStreamStatus, startVideoStream, stopVideoStream, uploadVideo, type UploadedVideoResult, type VideoStreamStatus } from '@/api/video_stream'
 import wsClient from '@/utils/websocket'
 import type { WebSocketMessage } from '@/utils/websocket'
+import { buildDefaultRtspUrl as buildPlaybackRtspUrl, getKnownLocalStreamHosts, rewriteRtspUrlForPlayback } from '@/utils/stream_host'
 import VideoPlayer from '@/components/VideoPlayer/index.vue'
 import { pageDetectionRecords, type DetectionRecord, type DetectionRecordQueryParams } from '@/api/detection'
 import { getUserList } from '@/api/user'
@@ -839,6 +970,43 @@ const recordingStatus = ref<{
 
 const selectedRecordingCameraId = ref<number | null>(1)
 const recordingFiles = ref<RecordingFileItem[]>([])
+const VIDEO_SOURCE_CAMERA_ID = 1004
+type VideoSourceMode = 'upload' | 'stream'
+type VideoSourceViewBackup = {
+  displayIds: number[]
+  activeId?: number
+  inferenceEnabled: boolean
+  trackingEnabled: boolean
+  trackerBackend: TrackerBackend
+}
+
+const videoSourceDialogVisible = ref(false)
+const videoSourceLoading = ref(false)
+const videoSourceMode = ref<VideoSourceMode>('upload')
+const videoSourceLoop = ref(false)
+const videoAutoInference = ref(true)
+const videoAutoTrack = ref(true)
+const videoStreamUrl = ref('')
+const videoUploadFiles = ref<UploadUserFile[]>([])
+const pendingVideoFile = ref<File | null>(null)
+const uploadedVideoInfo = ref<UploadedVideoResult | null>(null)
+const videoSourceViewBackup = ref<VideoSourceViewBackup | null>(null)
+
+const createEmptyVideoSourceStatus = (): VideoStreamStatus => ({
+  videoMode: false,
+  videoPath: '',
+  videoLoop: false,
+  inferenceEnabled: false,
+  trackerEnabled: false,
+  trackerBackend: '',
+  rtspStreaming: false,
+  rtspUrl: '',
+  running: false
+})
+
+const videoSourceStatus = ref<VideoStreamStatus>(createEmptyVideoSourceStatus())
+const videoSourceActive = computed(() => videoSourceStatus.value.videoMode)
+const currentVideoSourceRtspUrl = computed(() => rewriteRtspUrlForPlayback(videoSourceStatus.value.rtspUrl, 'cam3'))
 
 const resolveRecordingCameraKey = (camera?: Camera | null): 'cam0' | 'cam1' | null => {
   if (!camera) return null
@@ -1019,13 +1187,383 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
   return fallback
 }
 
-const getCurrentStreamHost = (): string => {
-  if (typeof window === 'undefined') return '127.0.0.1'
-  return window.location.hostname.trim() || '127.0.0.1'
+const normalizeVideoSourceStatus = (raw: any): VideoStreamStatus => {
+  const tracker = parseTrackerBackendLike(raw?.trackerBackend) ?? parseTrackerBackendLike(raw?.tracker_backend) ?? ''
+  return {
+    videoMode: parseBooleanLike(raw?.videoMode) ?? parseBooleanLike(raw?.video_mode) ?? false,
+    videoPath: typeof raw?.videoPath === 'string'
+      ? raw.videoPath
+      : (typeof raw?.video_path === 'string' ? raw.video_path : ''),
+    videoLoop: parseBooleanLike(raw?.videoLoop) ?? parseBooleanLike(raw?.video_loop) ?? false,
+    inferenceEnabled: parseBooleanLike(raw?.inferenceEnabled) ?? parseBooleanLike(raw?.inference_enabled) ?? false,
+    trackerEnabled: parseBooleanLike(raw?.trackerEnabled) ?? parseBooleanLike(raw?.tracker_enabled) ?? false,
+    trackerBackend: tracker,
+    rtspStreaming: parseBooleanLike(raw?.rtspStreaming) ?? parseBooleanLike(raw?.rtsp_streaming) ?? false,
+    rtspUrl: typeof raw?.rtspUrl === 'string'
+      ? raw.rtspUrl
+      : (typeof raw?.rtsp_url_video === 'string' ? raw.rtsp_url_video : ''),
+    running: parseBooleanLike(raw?.running) ?? false
+  }
+}
+
+const isVideoSourceCamera = (camera?: Camera | null): boolean => {
+  if (!camera) return false
+  return camera.id === VIDEO_SOURCE_CAMERA_ID || camera.rtspUrl.includes('/cam3')
+}
+
+const applyDefaultVideoSourcePreset = () => {
+  videoAutoInference.value = true
+  videoAutoTrack.value = true
+}
+
+const buildVideoSourceCamera = (): Camera => ({
+  id: VIDEO_SOURCE_CAMERA_ID,
+  name: '视频/拉流源',
+  location: videoSourceStatus.value.videoPath || '外部视频流',
+  rtspUrl: currentVideoSourceRtspUrl.value,
+  status: 1,
+  isEnabled: true,
+  detectionEnabled: videoSourceStatus.value.inferenceEnabled
+})
+
+const showVideoSourceCamera = () => {
+  const videoCamera = buildVideoSourceCamera()
+  displayCameras.value = [videoCamera]
+  activeCamera.value = videoCamera
+  recentDetections.value = []
+}
+
+const clearVideoSourceCameraView = () => {
+  if (!displayCameras.value.some(camera => isVideoSourceCamera(camera))) {
+    return
+  }
+
+  displayCameras.value = displayCameras.value.filter(camera => !isVideoSourceCamera(camera))
+  if (activeCamera.value && isVideoSourceCamera(activeCamera.value)) {
+    activeCamera.value = undefined
+    recentDetections.value = []
+  }
+}
+
+const restoreCameraViewAfterVideoMode = () => {
+  ensureDefaultCamerasInList()
+  const backup = videoSourceViewBackup.value
+  if (backup && backup.displayIds.length > 0) {
+    restoreDisplayCamerasAfterRefresh(backup.displayIds, backup.activeId)
+  } else {
+    autoSelectDefaultCameras()
+  }
+  videoSourceViewBackup.value = null
+}
+
+const syncVideoSourceStatusFromServer = async (silent = true): Promise<boolean> => {
+  try {
+    const data = await getVideoStreamStatus()
+    videoSourceStatus.value = normalizeVideoSourceStatus(data)
+    return videoSourceStatus.value.videoMode
+  } catch (error) {
+    videoSourceStatus.value = createEmptyVideoSourceStatus()
+    console.error('同步视频源状态失败:', error)
+    if (!silent) {
+      ElMessage.warning(getErrorMessage(error, '未获取到视频源状态'))
+    }
+    return false
+  }
+}
+
+const fetchRknnStatusPayload = async (): Promise<Record<string, any> | null> => {
+  try {
+    const res = await fetch('/api/rknn/status')
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+    const payload = await res.json()
+    return payload?.data && typeof payload.data === 'object' ? payload.data : payload
+  } catch (error) {
+    console.error('获取视觉服务状态失败:', error)
+    return null
+  }
+}
+
+const getRestoreTargetCameras = (): Camera[] => {
+  const backupIds = videoSourceViewBackup.value?.displayIds ?? []
+  const targetIds = backupIds.filter(cameraId => cameraId !== VIDEO_SOURCE_CAMERA_ID)
+  const fallbackTargets = buildDefaultCameras()
+
+  if (targetIds.length === 0) {
+    return fallbackTargets
+  }
+
+  return targetIds
+    .map(cameraId => resolveCameraAfterRefresh(cameraId) ?? fallbackTargets.find(camera => camera.id === cameraId))
+    .filter((camera): camera is Camera => !!camera)
+}
+
+const areRestoreTargetStreamsReady = (statusData: Record<string, any>): boolean => {
+  const restoreTargets = getRestoreTargetCameras()
+  if (restoreTargets.length === 0) {
+    return true
+  }
+
+  return restoreTargets.every(camera => inferCameraOnlineStatusFromRknn(camera, statusData) === 1)
+}
+
+const waitForCameraStreamsReady = async (silent = true): Promise<boolean> => {
+  const maxAttempts = isWebRtcStream ? 8 : 6
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const statusData = await fetchRknnStatusPayload()
+    if (statusData && areRestoreTargetStreamsReady(statusData)) {
+      if (isWebRtcStream) {
+        // WebRTC/WHEP 路径比 RTSP 状态就绪略慢半拍，给 MediaMTX 一点预热时间。
+        await sleep(1600)
+      }
+      return true
+    }
+
+    if (attempt < maxAttempts) {
+      await sleep(700)
+    }
+  }
+
+  if (!silent) {
+    ElMessage.warning('摄像头流恢复较慢，页面将继续尝试切回摄像头模式')
+  }
+  return false
+}
+
+const restoreCameraPipelineAfterVideoMode = async (silent = true) => {
+  const backup = videoSourceViewBackup.value
+  const targetInferenceEnabled = backup?.inferenceEnabled ?? objectDetectionEnabled.value
+  const targetTrackingEnabled = backup?.trackingEnabled ?? trackingEnabled.value
+  const targetTrackerBackend = backup?.trackerBackend ?? trackerBackend.value
+
+  trackerBackend.value = targetTrackerBackend
+  saveTrackerBackend(targetTrackerBackend)
+  setTrackingToggleState(targetTrackingEnabled)
+
+  const streamStarted = await startRtspStream()
+  if (!streamStarted && !silent) {
+    ElMessage.warning('摄像头推流恢复较慢，已继续尝试恢复监控画面')
+  }
+
+  try {
+    if (targetInferenceEnabled) {
+      await applySelectedModelProfile(true)
+    }
+
+    const endpoint = targetInferenceEnabled
+      ? `/api/rknn/inference/on?track=${targetTrackingEnabled ? 'true' : 'false'}&tracker=${encodeURIComponent(targetTrackerBackend)}`
+      : '/api/rknn/inference/off'
+    const res = await fetch(endpoint, { method: 'POST' })
+    const data = await res.json()
+    if (!isRknnOperationSuccess(data)) {
+      throw new Error(getRknnOperationErrorMessage(data, targetInferenceEnabled ? '恢复摄像头推理失败' : '关闭摄像头推理失败'))
+    }
+  } catch (error) {
+    console.error('恢复摄像头推理状态失败:', error)
+    if (!silent) {
+      ElMessage.warning(getErrorMessage(error, '摄像头推理状态恢复失败'))
+    }
+  }
+
+  await syncDetectionToggleFromServer(true)
+}
+
+const completeCameraRestoreAfterVideoMode = async (silent = true) => {
+  clearVideoSourceCameraView()
+  await restoreCameraPipelineAfterVideoMode(silent)
+  await waitForCameraStreamsReady(silent)
+  restoreCameraViewAfterVideoMode()
+}
+
+const openVideoSourceDialog = async () => {
+  videoSourceMode.value = 'upload'
+  videoStreamUrl.value = ''
+  pendingVideoFile.value = null
+  uploadedVideoInfo.value = null
+  videoUploadFiles.value = []
+  videoSourceLoop.value = false
+  applyDefaultVideoSourcePreset()
+  videoSourceDialogVisible.value = true
+  await syncVideoSourceStatusFromServer(true)
+}
+
+const handleVideoFileChange: UploadProps['onChange'] = (uploadFile, uploadFiles) => {
+  videoSourceMode.value = 'upload'
+  videoStreamUrl.value = ''
+  applyDefaultVideoSourcePreset()
+  pendingVideoFile.value = uploadFile.raw ?? null
+  uploadedVideoInfo.value = null
+  videoUploadFiles.value = uploadFiles.slice(-1).map(file => ({
+    name: file.name,
+    percentage: file.percentage,
+    status: file.status,
+    size: file.size,
+    uid: file.uid,
+    url: file.url
+  }))
+}
+
+const handleVideoFileRemove: UploadProps['onRemove'] = () => {
+  pendingVideoFile.value = null
+  uploadedVideoInfo.value = null
+}
+
+const isLocalVideoOutputSource = (sourcePath: string): boolean => {
+  const trimmed = sourcePath.trim()
+  if (!trimmed) return false
+
+  const localHosts = new Set(getKnownLocalStreamHosts())
+
+  try {
+    const url = new URL(trimmed)
+    const host = url.hostname.trim()
+    const port = url.port.trim()
+    const path = url.pathname.trim()
+    if (!localHosts.has(host)) return false
+
+    if ((port === '8889' && path.includes('/whep')) || (port === '8888' && path.endsWith('/index.m3u8'))) {
+      return true
+    }
+
+    if (port === '8554' && /^\/cam[0-3]$/.test(path)) {
+      return true
+    }
+  } catch {
+    return false
+  }
+
+  return false
+}
+
+const resolveVideoSourcePathForStart = async (): Promise<string> => {
+  if (videoSourceMode.value === 'stream') {
+    const sourcePath = videoStreamUrl.value.trim()
+    if (!sourcePath) {
+      throw new Error('请输入流地址')
+    }
+    if (isLocalVideoOutputSource(sourcePath)) {
+      throw new Error('不能把本系统自己的 RTSP/HLS/WHEP 输出地址再作为输入源，请使用上传视频文件或外部流地址')
+    }
+    return sourcePath
+  }
+
+  if (pendingVideoFile.value) {
+    uploadedVideoInfo.value = await uploadVideo(pendingVideoFile.value)
+    pendingVideoFile.value = null
+  }
+
+  const sourcePath = uploadedVideoInfo.value?.absolutePath?.trim() || ''
+  if (!sourcePath) {
+    throw new Error('请先选择并上传视频文件')
+  }
+  return sourcePath
+}
+
+const handleStartVideoSource = async () => {
+  if (videoSourceLoading.value) return
+
+  videoSourceLoading.value = true
+  try {
+    const sourcePath = await resolveVideoSourcePathForStart()
+
+    if (videoAutoInference.value) {
+      const applied = await applySelectedModelProfile(false)
+      if (!applied) {
+        return
+      }
+    }
+
+    if (!videoSourceActive.value) {
+      videoSourceViewBackup.value = {
+        displayIds: displayCameras.value.map(camera => camera.id),
+        activeId: activeCamera.value?.id,
+        inferenceEnabled: objectDetectionEnabled.value,
+        trackingEnabled: trackingEnabled.value,
+        trackerBackend: trackerBackend.value
+      }
+    }
+
+    await startVideoStream({
+      sourcePath,
+      loop: videoSourceMode.value === 'upload' ? videoSourceLoop.value : false,
+      startRtsp: true,
+      enableInference: videoAutoInference.value,
+      track: videoAutoInference.value ? videoAutoTrack.value : false,
+      tracker: trackerBackend.value
+    })
+
+    await syncDetectionToggleFromServer(true)
+    await syncVideoSourceStatusFromServer(true)
+    await sleep(isWebRtcStream ? 1800 : 1200)
+    showVideoSourceCamera()
+    videoSourceDialogVisible.value = false
+
+    ElMessage.success(
+      videoSourceMode.value === 'upload'
+        ? '视频已上传并启动推理'
+        : '拉流源已启动推理'
+    )
+  } catch (error) {
+    console.error('启动视频源失败:', error)
+    ElMessage.error(getErrorMessage(error, '启动视频源失败'))
+  } finally {
+    videoSourceLoading.value = false
+  }
+}
+
+const handleStopVideoSource = async (closeDialog = false) => {
+  if (videoSourceLoading.value) return
+
+  videoSourceLoading.value = true
+  try {
+    await stopVideoStream({
+      stopRtsp: true,
+      restartCameraRtsp: true
+    })
+
+    clearVideoSourceCameraView()
+    await syncDetectionToggleFromServer(true)
+    await syncVideoSourceStatusFromServer(true)
+    await completeCameraRestoreAfterVideoMode(false)
+    if (closeDialog) {
+      videoSourceDialogVisible.value = false
+    }
+    ElMessage.success('已停止视频/拉流源，并恢复摄像头模式')
+  } catch (error) {
+    console.error('停止视频源失败:', error)
+    ElMessage.error(getErrorMessage(error, '停止视频源失败'))
+  } finally {
+    videoSourceLoading.value = false
+  }
+}
+
+const reconcileVideoSourceView = async (silent = true) => {
+  if (videoSourceLoading.value) {
+    return
+  }
+
+  const videoModeActive = await syncVideoSourceStatusFromServer(silent)
+  const showingVideoSource = displayCameras.value.some(camera => isVideoSourceCamera(camera))
+
+  if (videoModeActive) {
+    if (showingVideoSource) {
+      showVideoSourceCamera()
+    }
+    return
+  }
+
+  if (showingVideoSource) {
+    await completeCameraRestoreAfterVideoMode(silent)
+    if (!silent) {
+      ElMessage.warning('视频源已停止，页面已自动恢复到摄像头模式')
+    }
+  }
 }
 
 const buildDefaultRtspUrl = (path: string): string => {
-  return `rtsp://${getCurrentStreamHost()}:8554/${path}`
+  return buildPlaybackRtspUrl(path)
 }
 
 const buildModelOptionLabel = (profile: ModelProfile): string => {
@@ -1040,6 +1578,7 @@ const cameraMatchesStreamPath = (camera: Camera, path: string): boolean => {
   return camera.id === 1 && path === 'cam0'
     || camera.id === 2 && path === 'cam1'
     || isMosaicCamera(camera) && path === 'cam2'
+    || isVideoSourceCamera(camera) && path === 'cam3'
     || camera.rtspUrl.includes(`/${path}`)
 }
 
@@ -2246,31 +2785,41 @@ onMounted(async () => {
   // 获取摄像头列表
   await fetchCameras()
 
+  const videoModeActive = await syncVideoSourceStatusFromServer(true)
+
   // 添加WebSocket消息处理器
   wsClient.addMessageHandler(handleWebSocketMessage)
 
   // 添加页面离开时的清理逻辑
   window.addEventListener('beforeunload', handleBeforeUnload)
 
-  // 自动开启推流
-  const streamStarted = await startRtspStream()
-  if (streamStarted && !isWebRtcStream) {
-    // 给 HLS 切片生成一个短暂预热时间，避免首次进入时播放器拿到空清单
-    await sleep(1200)
-  }
+  if (videoModeActive) {
+    showVideoSourceCamera()
+  } else {
+    // 自动开启推流
+    const streamStarted = await startRtspStream()
+    if (streamStarted && !isWebRtcStream) {
+      // 给 HLS 切片生成一个短暂预热时间，避免首次进入时播放器拿到空清单
+      await sleep(1200)
+    }
 
-  // 默认选择前两个在线的摄像头
-  autoSelectDefaultCameras()
+    // 默认选择前两个在线的摄像头
+    autoSelectDefaultCameras()
+  }
 
   // 启动定时获取检测数量
   detectionCountInterval.value = window.setInterval(fetchDetectionCounts, 2000)
   recordingStatusInterval.value = window.setInterval(() => {
     void syncRecordingStatusFromServer(true)
   }, 5000)
+  videoSourceStatusInterval.value = window.setInterval(() => {
+    void reconcileVideoSourceView(true)
+  }, 4000)
 })
 
 let detectionCountInterval = ref<number | null>(null)
 let recordingStatusInterval = ref<number | null>(null)
+let videoSourceStatusInterval = ref<number | null>(null)
 
 // 自动开启推流
 const startRtspStream = async (): Promise<boolean> => {
@@ -2319,6 +2868,9 @@ onBeforeUnmount(() => {
   }
   if (recordingStatusInterval.value) {
     clearInterval(recordingStatusInterval.value)
+  }
+  if (videoSourceStatusInterval.value) {
+    clearInterval(videoSourceStatusInterval.value)
   }
 
   // 停止所有视频流
@@ -2373,10 +2925,15 @@ const refreshCameras = async () => {
   await Promise.all([
     fetchCameras(),
     fetchModelProfiles(true),
-    syncRecordingStatusFromServer(true)
+    syncRecordingStatusFromServer(true),
+    syncVideoSourceStatusFromServer(true)
   ])
 
   ensureDefaultCamerasInList()
+  if (videoSourceActive.value) {
+    showVideoSourceCamera()
+    return
+  }
   restoreDisplayCamerasAfterRefresh(previousDisplayIds, previousActiveId)
 }
 
@@ -2395,7 +2952,12 @@ const formatTime = (dateStr: string) => {
 }
 
 // 从显示列表中移除摄像头
-const removeCamera = (camera: Camera) => {
+const removeCamera = async (camera: Camera) => {
+  if (isVideoSourceCamera(camera)) {
+    await handleStopVideoSource(false)
+    return
+  }
+
   // 停止摄像头的视频流
   wsClient.send({
     type: 'stop_stream',
@@ -2417,8 +2979,13 @@ const removeCamera = (camera: Camera) => {
 }
 
 // 清空所有显示的摄像头
-const clearAllCameras = () => {
+const clearAllCameras = async () => {
   if (displayCameras.value.length === 0) return
+
+  if (displayCameras.value.some(camera => isVideoSourceCamera(camera))) {
+    await handleStopVideoSource(false)
+    return
+  }
   
   // 停止所有摄像头的视频流
   displayCameras.value.forEach(camera => {
@@ -2524,6 +3091,12 @@ const formatLastSentTime = (timestamp: number | null): string => {
     align-items: center;
   }
 
+  .panel-title-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
   .monitor-container {
     flex: 1;
     display: flex;
@@ -2589,6 +3162,36 @@ const formatLastSentTime = (timestamp: number | null): string => {
         min-height: 70%;
       }
     }
+  }
+}
+
+.video-source-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  :deep(.el-alert) {
+    margin-bottom: 4px;
+  }
+
+  .video-upload-tip {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    line-height: 1.6;
+  }
+
+  .video-uploaded-meta {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--el-color-success);
+  }
+
+  .source-path-text {
+    display: inline-block;
+    max-width: 100%;
+    word-break: break-all;
+    color: var(--el-text-color-primary);
   }
 }
 

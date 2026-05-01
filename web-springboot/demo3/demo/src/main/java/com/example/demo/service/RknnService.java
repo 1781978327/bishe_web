@@ -1,5 +1,7 @@
 package com.example.demo.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.demo.dto.ForbiddenAreaPoint;
 import com.example.demo.dto.ForbiddenAreaSaveRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -7,22 +9,31 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import jakarta.annotation.PostConstruct;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,6 +41,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 @Service
 public class RknnService {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    private static final Path UPLOAD_ROOT = Paths.get("./uploads").toAbsolutePath().normalize();
+    private static final Path VIDEO_UPLOAD_ROOT = UPLOAD_ROOT.resolve("videos").normalize();
+    private static final long MAX_VIDEO_FILE_SIZE = 200L * 1024 * 1024;
+    private static final Set<String> ALLOWED_VIDEO_EXTENSIONS = Set.of(
+            ".mp4", ".mov", ".avi", ".mkv", ".flv", ".ts", ".m4v", ".webm"
+    );
+    private static final Set<String> REMOTE_VIDEO_SOURCE_PREFIXES = Set.of(
+            "rtsp://", "rtmp://", "http://", "https://", "udp://", "tcp://"
+    );
 
     @Autowired(required = false)
     private RestTemplate rknnServerRestTemplate;
@@ -513,22 +536,19 @@ public class RknnService {
      */
     public Map<String, Object> startVideo(String videoPath, boolean loop) {
         try {
-            String url = getApiUrl("/api/video/start");
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            String body = String.format("{\"path\": \"%s\", \"loop\": %s}", videoPath, loop);
-            HttpEntity<String> request = new HttpEntity<>(body, headers);
-
-            ResponseEntity<Map> response = rknnServerRestTemplate.postForEntity(url, request, Map.class);
-
-            if (response.getStatusCode().is2xxSuccessful()) {
+            String body = "{\"path\":\"" + escapeJson(videoPath) + "\",\"loop\":" + (loop ? "true" : "false") + "}";
+            Map<String, Object> response = postJsonWithRawHttp("/api/video/start", body);
+            if (isOperationSuccess(response)) {
                 videoPlaying.set(true);
                 log.info("视频播放已开启: {}, loop={}", videoPath, loop);
-                return response.getBody();
+                return response;
             }
-            log.error("播放视频失败: {}", response.getStatusCode());
-            return Map.of("success", false, "error", "HTTP " + response.getStatusCode());
+            log.error("播放视频失败: {}", extractOperationError(response, "unknown"));
+            return response;
         } catch (RestClientException e) {
+            log.error("播放视频失败: {}", e.getMessage());
+            return Map.of("success", false, "error", e.getMessage());
+        } catch (IOException e) {
             log.error("播放视频失败: {}", e.getMessage());
             return Map.of("success", false, "error", e.getMessage());
         }
@@ -553,6 +573,141 @@ public class RknnService {
             log.error("停止视频失败: {}", e.getMessage());
             return Map.of("success", false, "error", e.getMessage());
         }
+    }
+
+    public Map<String, Object> uploadVideo(MultipartFile file) throws IOException {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("视频文件不能为空");
+        }
+        if (file.getSize() > MAX_VIDEO_FILE_SIZE) {
+            throw new IllegalArgumentException("视频文件不能超过 200MB");
+        }
+
+        String originalFilename = StringUtils.cleanPath(file.getOriginalFilename());
+        if (!StringUtils.hasText(originalFilename)) {
+            throw new IllegalArgumentException("视频文件名不能为空");
+        }
+
+        String extension = extractVideoExtension(originalFilename);
+        if (!ALLOWED_VIDEO_EXTENSIONS.contains(extension)) {
+            throw new IllegalArgumentException("仅支持 mp4/mov/avi/mkv/flv/ts/m4v/webm 视频文件");
+        }
+
+        String baseName = originalFilename.substring(0, originalFilename.length() - extension.length());
+        String safeBaseName = sanitizeVideoFileName(baseName);
+        if (!StringUtils.hasText(safeBaseName)) {
+            safeBaseName = "video";
+        }
+
+        Path targetDir = VIDEO_UPLOAD_ROOT.resolve("default").normalize();
+        Files.createDirectories(targetDir);
+        if (!targetDir.startsWith(UPLOAD_ROOT)) {
+            throw new IllegalStateException("视频上传目录非法");
+        }
+
+        Path target = allocateVideoUploadTarget(targetDir, safeBaseName, extension);
+        file.transferTo(target.toFile());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("fileName", target.getFileName().toString());
+        result.put("originalFileName", originalFilename);
+        result.put("relativePath", VIDEO_UPLOAD_ROOT.relativize(target).toString().replace("\\", "/"));
+        result.put("absolutePath", target.toString());
+        result.put("url", "/api/uploads/videos/default/" + target.getFileName());
+        result.put("size", file.getSize());
+        return result;
+    }
+
+    public Map<String, Object> startVideoSource(String sourcePath,
+                                                boolean loop,
+                                                boolean startRtsp,
+                                                boolean enableInference,
+                                                boolean track,
+                                                String trackerBackend) {
+        String resolvedSourcePath = normalizeVideoSourcePath(sourcePath);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("sourcePath", resolvedSourcePath);
+        result.put("loop", loop);
+        result.put("startRtsp", startRtsp);
+        result.put("enableInference", enableInference);
+        result.put("track", track);
+        if (trackerBackend != null && !trackerBackend.isBlank()) {
+            result.put("tracker", trackerBackend.trim().toLowerCase(Locale.ROOT));
+        }
+
+        Map<String, Object> videoStartResult = startVideo(resolvedSourcePath, loop);
+        result.put("videoStart", videoStartResult);
+        if (!isOperationSuccess(videoStartResult)) {
+            result.put("success", false);
+            result.put("error", extractOperationError(videoStartResult, "启动视频/流源失败"));
+            return result;
+        }
+
+        if (startRtsp) {
+            Map<String, Object> rtspStartResult = startVideoRtsp();
+            result.put("rtspStart", rtspStartResult);
+            if (!isOperationSuccess(rtspStartResult)) {
+                result.put("success", false);
+                result.put("error", extractOperationError(rtspStartResult, "启动视频推流失败"));
+                return result;
+            }
+        }
+
+        if (enableInference) {
+            Map<String, Object> inferenceStartResult = startInference(track, trackerBackend);
+            result.put("inferenceStart", inferenceStartResult);
+            if (!isOperationSuccess(inferenceStartResult)) {
+                result.put("success", false);
+                result.put("error", extractOperationError(inferenceStartResult, "启动视频推理失败"));
+                return result;
+            }
+        }
+
+        result.put("videoStatus", getVideoStatus());
+        result.put("status", getStatus());
+        result.put("rtspUrls", getRtspUrls());
+        result.put("success", true);
+        return result;
+    }
+
+    public Map<String, Object> stopVideoSource(boolean stopRtsp, boolean restartCameraRtsp) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("stopRtsp", stopRtsp);
+        result.put("restartCameraRtsp", restartCameraRtsp);
+
+        Map<String, Object> videoStopResult = stopVideo();
+        result.put("videoStop", videoStopResult);
+        if (!isOperationSuccess(videoStopResult)) {
+            result.put("success", false);
+            result.put("error", extractOperationError(videoStopResult, "停止视频源失败"));
+            return result;
+        }
+
+        if (stopRtsp) {
+            Map<String, Object> rtspStopResult = stopRtsp();
+            result.put("rtspStop", rtspStopResult);
+            if (!isOperationSuccess(rtspStopResult)) {
+                result.put("success", false);
+                result.put("error", extractOperationError(rtspStopResult, "停止视频推流失败"));
+                return result;
+            }
+        }
+
+        if (restartCameraRtsp) {
+            Map<String, Object> cameraRtspResult = startCameraRtsp();
+            result.put("cameraRtspRestart", cameraRtspResult);
+            if (!isOperationSuccess(cameraRtspResult)) {
+                result.put("success", false);
+                result.put("error", extractOperationError(cameraRtspResult, "恢复摄像头推流失败"));
+                return result;
+            }
+        }
+
+        result.put("videoStatus", getVideoStatus());
+        result.put("status", getStatus());
+        result.put("success", true);
+        return result;
     }
 
     // ==================== 状态查询 ====================
@@ -591,6 +746,35 @@ public class RknnService {
             log.error("获取视频状态失败: {}", e.getMessage());
             return Map.of("success", false, "error", e.getMessage());
         }
+    }
+
+    public Map<String, Object> getVideoSourceStatus() {
+        Map<String, Object> videoStatus = getVideoStatus();
+        Map<String, Object> status = getStatus();
+
+        if (!isOperationSuccess(videoStatus) && !isOperationSuccess(status)) {
+            return Map.of(
+                    "success", false,
+                    "error", extractOperationError(status, extractOperationError(videoStatus, "获取视频源状态失败"))
+            );
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        Object rawVideoMode = status.get("video_mode");
+        if (rawVideoMode == null) {
+            rawVideoMode = videoStatus.get("video_mode");
+        }
+        result.put("videoMode", parseBooleanLike(rawVideoMode));
+        result.put("videoPath", readString(videoStatus, "video_path", "videoPath"));
+        result.put("videoLoop", parseBooleanLike(videoStatus.get("video_loop")));
+        result.put("inferenceEnabled", parseBooleanLike(status.get("inference_enabled")));
+        result.put("trackerEnabled", parseBooleanLike(status.get("tracker_enabled")));
+        result.put("trackerBackend", readString(status, "tracker_backend", "trackerBackend"));
+        result.put("rtspStreaming", parseBooleanLike(status.get("rtsp_streaming")));
+        result.put("rtspUrl", readString(status, "rtsp_url_video", "rtspUrlVideo"));
+        result.put("running", parseBooleanLike(status.get("running")));
+        result.put("success", true);
+        return result;
     }
 
     /**
@@ -867,5 +1051,216 @@ public class RknnService {
         result.put("pointCount", 0);
         result.put("points", List.of());
         return result;
+    }
+
+    private String extractVideoExtension(String fileName) {
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex < 0 || dotIndex == fileName.length() - 1) {
+            throw new IllegalArgumentException("视频文件必须包含扩展名");
+        }
+        return fileName.substring(dotIndex).toLowerCase(Locale.ROOT);
+    }
+
+    private String sanitizeVideoFileName(String baseName) {
+        String sanitized = baseName.replaceAll("[^a-zA-Z0-9._-]", "_");
+        while (sanitized.startsWith(".")) {
+            sanitized = sanitized.substring(1);
+        }
+        while (sanitized.endsWith(".")) {
+            sanitized = sanitized.substring(0, sanitized.length() - 1);
+        }
+        return sanitized;
+    }
+
+    private Path allocateVideoUploadTarget(Path targetDir, String baseName, String extension) throws IOException {
+        Path candidate = targetDir.resolve(baseName + extension).normalize();
+        int counter = 1;
+        while (Files.exists(candidate)) {
+            candidate = targetDir.resolve(baseName + "_" + counter + extension).normalize();
+            counter += 1;
+        }
+        if (!candidate.startsWith(targetDir)) {
+            throw new IOException("视频上传目标路径非法");
+        }
+        return candidate;
+    }
+
+    private String normalizeVideoSourcePath(String sourcePath) {
+        String raw = sourcePath == null ? "" : sourcePath.trim();
+        if (!StringUtils.hasText(raw)) {
+            throw new IllegalArgumentException("sourcePath 不能为空");
+        }
+
+        String normalized = raw.toLowerCase(Locale.ROOT);
+        for (String prefix : REMOTE_VIDEO_SOURCE_PREFIXES) {
+            if (normalized.startsWith(prefix)) {
+                return raw;
+            }
+        }
+
+        Path candidate = Paths.get(raw);
+        if (!candidate.isAbsolute()) {
+            candidate = VIDEO_UPLOAD_ROOT.resolve(candidate).normalize();
+        } else {
+            candidate = candidate.toAbsolutePath().normalize();
+        }
+
+        if (!candidate.startsWith(VIDEO_UPLOAD_ROOT)) {
+            throw new IllegalArgumentException("本地视频源仅支持 uploads/videos 目录下的文件");
+        }
+        if (!Files.exists(candidate) || !Files.isRegularFile(candidate)) {
+            throw new IllegalArgumentException("视频文件不存在: " + candidate);
+        }
+        return candidate.toString();
+    }
+
+    private Map<String, Object> postJsonWithRawHttp(String endpoint, String jsonBody) throws IOException {
+        byte[] bodyBytes = jsonBody.getBytes(StandardCharsets.UTF_8);
+        String requestText = "POST " + endpoint + " HTTP/1.1\r\n"
+                + "Host: " + rknnServerHost + ":" + rknnServerPort + "\r\n"
+                + "Content-Type: application/json\r\n"
+                + "Content-Length: " + bodyBytes.length + "\r\n"
+                + "Connection: close\r\n"
+                + "\r\n";
+
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(rknnServerHost, rknnServerPort), 5000);
+            socket.setSoTimeout(10000);
+
+            try (OutputStream output = socket.getOutputStream();
+                 BufferedInputStream input = new BufferedInputStream(socket.getInputStream())) {
+                output.write(requestText.getBytes(StandardCharsets.UTF_8));
+                output.write(bodyBytes);
+                output.flush();
+
+                ByteArrayOutputStream responseBuffer = new ByteArrayOutputStream();
+                byte[] chunk = new byte[4096];
+                int read;
+                while ((read = input.read(chunk)) != -1) {
+                    responseBuffer.write(chunk, 0, read);
+                }
+
+                String responseText = responseBuffer.toString(StandardCharsets.UTF_8);
+                return parseRawHttpJsonResponse(responseText);
+            }
+        }
+    }
+
+    private Map<String, Object> parseRawHttpJsonResponse(String responseText) throws IOException {
+        String[] sections = responseText.split("\\r\\n\\r\\n", 2);
+        String headerText = sections.length > 0 ? sections[0] : "";
+        String bodyText = sections.length > 1 ? sections[1] : "";
+
+        int statusCode = 500;
+        String[] headerLines = headerText.split("\\r\\n");
+        if (headerLines.length > 0) {
+            String[] statusParts = headerLines[0].split(" ");
+            if (statusParts.length >= 2) {
+                try {
+                    statusCode = Integer.parseInt(statusParts[1]);
+                } catch (NumberFormatException ignored) {
+                    statusCode = 500;
+                }
+            }
+        }
+
+        Map<String, Object> parsedBody;
+        if (bodyText == null || bodyText.isBlank()) {
+            parsedBody = new LinkedHashMap<>();
+        } else {
+            parsedBody = OBJECT_MAPPER.readValue(bodyText, new TypeReference<LinkedHashMap<String, Object>>() {});
+        }
+
+        if (statusCode >= 200 && statusCode < 300) {
+            return parsedBody;
+        }
+
+        Map<String, Object> errorResult = new LinkedHashMap<>(parsedBody);
+        errorResult.put("success", false);
+        if (!errorResult.containsKey("error")) {
+            Object message = errorResult.get("message");
+            errorResult.put("error", message instanceof String && !((String) message).isBlank()
+                    ? message
+                    : "HTTP " + statusCode);
+        }
+        errorResult.put("statusCode", statusCode);
+        return errorResult;
+    }
+
+    private String escapeJson(String text) {
+        if (text == null || text.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(text.length() + 16);
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            switch (ch) {
+                case '\\':
+                    sb.append("\\\\");
+                    break;
+                case '"':
+                    sb.append("\\\"");
+                    break;
+                case '\n':
+                    sb.append("\\n");
+                    break;
+                case '\r':
+                    sb.append("\\r");
+                    break;
+                case '\t':
+                    sb.append("\\t");
+                    break;
+                default:
+                    sb.append(ch);
+                    break;
+            }
+        }
+        return sb.toString();
+    }
+
+    private boolean isOperationSuccess(Map<String, Object> result) {
+        if (result == null || result.isEmpty()) {
+            return false;
+        }
+        Object success = result.get("success");
+        if (Boolean.FALSE.equals(success)) {
+            return false;
+        }
+        Object status = result.get("status");
+        if (status instanceof String statusText) {
+            String normalized = statusText.trim().toLowerCase(Locale.ROOT);
+            if ("error".equals(normalized) || "failed".equals(normalized) || "fail".equals(normalized)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String extractOperationError(Map<String, Object> result, String fallback) {
+        if (result == null || result.isEmpty()) {
+            return fallback;
+        }
+        Object error = result.get("error");
+        if (error instanceof String errorText && !errorText.isBlank()) {
+            return errorText;
+        }
+        Object message = result.get("message");
+        if (message instanceof String messageText && !messageText.isBlank()) {
+            return messageText;
+        }
+        return fallback;
+    }
+
+    private String readString(Map<String, Object> source, String... keys) {
+        if (source == null || keys == null) {
+            return "";
+        }
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value instanceof String text && !text.isBlank()) {
+                return text;
+            }
+        }
+        return "";
     }
 }

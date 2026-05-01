@@ -2,6 +2,8 @@ package com.example.demo.controller;
 
 import com.example.demo.dto.ForbiddenAreaSaveRequest;
 import com.example.demo.dto.Result;
+import com.example.demo.dto.VideoSourceStartRequest;
+import com.example.demo.dto.VideoSourceStopRequest;
 import com.example.demo.service.RknnService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +15,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.charset.StandardCharsets;
 import java.net.URI;
@@ -422,6 +425,81 @@ public class RknnController {
         } catch (Exception e) {
             log.error("获取检测数量失败", e);
             return Result.error(500, "获取检测数量失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/video/upload")
+    public Result<Map<String, Object>> uploadVideo(@RequestParam("file") MultipartFile file) {
+        try {
+            Map<String, Object> result = rknnService.uploadVideo(file);
+            return Result.success(result);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("上传视频失败", e);
+            return Result.error(500, "上传视频失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/video/start")
+    public Result<Map<String, Object>> startVideoSource(@RequestBody(required = false) VideoSourceStartRequest request) {
+        try {
+            String sourcePath = request == null ? null : request.getSourcePath();
+            if ((sourcePath == null || sourcePath.isBlank()) && request != null) {
+                sourcePath = request.getPath();
+            }
+            boolean loop = request != null && Boolean.TRUE.equals(request.getLoop());
+            boolean startRtsp = request == null || request.getStartRtsp() == null || Boolean.TRUE.equals(request.getStartRtsp());
+            boolean enableInference = request == null || request.getEnableInference() == null || Boolean.TRUE.equals(request.getEnableInference());
+            boolean track = request == null || request.getTrack() == null || Boolean.TRUE.equals(request.getTrack());
+            String tracker = request == null ? null : request.getTracker();
+
+            Map<String, Object> result = rknnService.startVideoSource(sourcePath, loop, startRtsp, enableInference, track, tracker);
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "启动视频/流源失败");
+                return Result.error(statusCode, message);
+            }
+            return Result.success(result);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        } catch (Exception e) {
+            log.error("启动视频/流源失败", e);
+            return Result.error(500, "启动视频/流源失败: " + e.getMessage());
+        }
+    }
+
+    @PostMapping("/video/stop")
+    public Result<Map<String, Object>> stopVideoSource(@RequestBody(required = false) VideoSourceStopRequest request) {
+        try {
+            boolean stopRtsp = request == null || request.getStopRtsp() == null || Boolean.TRUE.equals(request.getStopRtsp());
+            boolean restartCameraRtsp = request == null || request.getRestartCameraRtsp() == null || Boolean.TRUE.equals(request.getRestartCameraRtsp());
+            Map<String, Object> result = rknnService.stopVideoSource(stopRtsp, restartCameraRtsp);
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "停止视频/流源失败");
+                return Result.error(statusCode, message);
+            }
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("停止视频/流源失败", e);
+            return Result.error(500, "停止视频/流源失败: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/video/status")
+    public Result<Map<String, Object>> getVideoSourceStatus() {
+        try {
+            Map<String, Object> result = rknnService.getVideoSourceStatus();
+            if (isDownstreamError(result)) {
+                int statusCode = extractStatusCode(result.get("error"), 500);
+                String message = extractErrorMessage(result, "获取视频/流源状态失败");
+                return Result.error(statusCode, message);
+            }
+            return Result.success(result);
+        } catch (Exception e) {
+            log.error("获取视频/流源状态失败", e);
+            return Result.error(500, "获取视频/流源状态失败: " + e.getMessage());
         }
     }
 }

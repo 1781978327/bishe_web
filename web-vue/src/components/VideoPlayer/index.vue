@@ -131,6 +131,7 @@ import wsClient from '@/utils/websocket'
 import type { WebSocketMessage } from '@/utils/websocket'
 import { ElMessage } from 'element-plus'
 import { addDetectionRecord } from '@/api/detection'
+import { getPreferredStreamHost } from '@/utils/stream_host'
 import { 
   Warning, 
   PictureRounded, 
@@ -225,17 +226,9 @@ const algoWsEnabled = computed(() => !!import.meta.env.VITE_ALGO_WS_URL)
 const streamProtocol = (((import.meta.env.VITE_STREAM_PROTOCOL as string | undefined) || 'webrtc')).toLowerCase()
 const isWebRtcMode = computed(() => !algoWsEnabled.value && streamProtocol === 'webrtc')
 
-const getCurrentPageHost = (): string => {
-  if (typeof window === 'undefined') return ''
-  return window.location.hostname.trim()
-}
-
 const resolveStreamHost = (rtspUrl: string): string => {
-  const overrideHost = ((import.meta.env.VITE_STREAM_HOST as string | undefined) || '').trim()
-  if (overrideHost) return overrideHost
-
-  const pageHost = getCurrentPageHost()
-  if (pageHost) return pageHost
+  const preferredHost = getPreferredStreamHost()
+  if (preferredHost) return preferredHost
 
   try {
     return new URL(rtspUrl).hostname
