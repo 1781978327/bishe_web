@@ -1,0 +1,1 @@
+/usr/bin/c++     CMakeFiles/sensor_reader_http.dir/sensor_reader_http.cpp.o CMakeFiles/sensor_reader_http.dir/src/dht11_module.cpp.o CMakeFiles/sensor_reader_http.dir/src/ads1115_module.cpp.o CMakeFiles/sensor_reader_http.dir/src/sensor_http_server.cpp.o  -o sensor_reader_http  -lwiringPi -lmicrohttpd -lpthread 

@@ -1,0 +1,34 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/src/audio_capture.c
+errno.h
+-
+signal.h
+-
+stdio.h
+-
+stdlib.h
+-
+string.h
+-
+sys/types.h
+-
+sys/wait.h
+-
+unistd.h
+-
+alsa/asoundlib.h
+-
+audio_capture.h
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/src/audio_capture.h
+
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/src/audio_capture.h
+stdint.h
+-
+

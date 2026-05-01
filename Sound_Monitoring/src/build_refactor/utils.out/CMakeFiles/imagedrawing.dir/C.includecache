@@ -1,0 +1,30 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/utils/common.h
+
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/utils/font.h
+
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/utils/image_drawing.c
+stdio.h
+-
+stdlib.h
+-
+string.h
+-
+ctype.h
+-
+image_drawing.h
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/utils/image_drawing.h
+font.h
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/utils/font.h
+
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/utils/image_drawing.h
+common.h
+/home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/utils/common.h
+

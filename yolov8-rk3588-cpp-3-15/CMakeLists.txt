@@ -239,9 +239,23 @@ endif()
 # =====================================================================
 set(HTTP_CTRL_SOURCES
     src/main_http_ctrl.cc
+    src/http_ctrl_globals.cpp
+    src/http_ctrl_utils.cpp
+    src/http_ctrl_usage_monitor.cpp
+    src/http_ctrl_http_client.cpp
+    src/http_ctrl_tracker_draw.cpp
+    src/http_ctrl_mediamtx.cpp
+    src/http_ctrl_v4l2_auto.cpp
+    src/http_ctrl_recording.cpp
+    src/http_ctrl_model.cpp
+    src/http_ctrl_video.cpp
+    src/http_ctrl_rtsp.cpp
+    src/http_ctrl_alerts.cpp
+    src/http_ctrl_routes.cpp
     src/http_ctrl_camera_io.cpp
     src/http_ctrl_raw_video_rtsp.cpp
     src/http_ctrl_web_utils.cpp
+    src/rknn_pool_data.cpp
     src/postprocess.cc
     src/rk_common.cc
     src/v4l2_dmabuf_capture.cpp

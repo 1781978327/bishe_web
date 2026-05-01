@@ -16,11 +16,56 @@
 
 Spring Boot 默认通过 `http://localhost:8091` 访问本服务。
 
+## 源码结构
+
+```text
+yolov8-rk3588-cpp-3-15/src/
+├── main_http_ctrl.cc              # 服务入口（banner + main 推理循环）
+├── http_ctrl_globals.cpp          # 全局变量定义
+├── http_ctrl_routes.cpp           # 路由处理函数 + 分发器 + HTTP 服务器线程
+├── http_ctrl_utils.cpp            # 文件/路径工具、URL 解码、查询参数
+├── http_ctrl_model.cpp            # 模型路径检测、懒加载/卸载、状态响应
+├── http_ctrl_rtsp.cpp             # RTSP 发送器、DMA-BUF slot、马赛克帧
+├── http_ctrl_recording.cpp        # 摄像头录像管理（ffmpeg fork/exec）
+├── http_ctrl_alerts.cpp           # 检测计数报警、禁区、入侵检测、叠加绘制
+├── http_ctrl_video.cpp            # 视频文件播放（打开、读取、循环、停止）
+├── http_ctrl_tracker_draw.cpp     # 跟踪框绘制、从 tracks 构建 detections
+├── http_ctrl_v4l2_auto.cpp        # V4L2 自动检测、摄像头源分配、打开
+├── http_ctrl_mediamtx.cpp         # mediamtx 二进制定位与自动启动
+├── http_ctrl_usage_monitor.cpp    # CPU/NPU 使用率监控
+├── http_ctrl_http_client.cpp      # 出站 HTTP 客户端（上报用）
+├── http_ctrl_camera_io.cpp        # 摄像头帧采集（DMABUF / OpenCV）
+├── http_ctrl_web_utils.cpp        # Web 工具函数
+├── http_ctrl_raw_video_rtsp.cpp   # 视频裸流 RTSP 推送线程
+└── postprocess.cc / rk_common.cc / v4l2_dmabuf_capture.cpp  # 底层组件
+
+yolov8-rk3588-cpp-3-15/include/
+├── http_ctrl_globals.h            # 全局变量 extern 声明、结构体、常量
+├── http_ctrl_routes.h             # 路由处理函数声明
+├── http_ctrl_utils.h              # 工具函数声明
+├── http_ctrl_model.h              # 模型管理声明
+├── http_ctrl_rtsp.h               # RTSP 相关声明
+├── http_ctrl_recording.h          # 录像管理声明
+├── http_ctrl_alerts.h             # 报警相关声明
+├── http_ctrl_video.h              # 视频模式声明
+├── http_ctrl_tracker_draw.h       # 跟踪绘制声明
+├── http_ctrl_v4l2_auto.h          # V4L2 声明
+├── http_ctrl_mediamtx.h           # mediamtx 声明
+├── http_ctrl_usage_monitor.h      # 监控声明
+├── http_ctrl_http_client.h        # HTTP 客户端声明
+├── http_ctrl_camera_io.h          # 摄像头 IO 声明
+├── http_ctrl_web_utils.h          # Web 工具声明
+├── http_ctrl_raw_video_rtsp.h     # 裸流 RTSP 声明
+├── postprocess.h                  # 后处理声明
+├── rk_common.h                    # RK 公共声明
+└── v4l2_dmabuf_capture.h          # V4L2 DMA-BUF 声明
+```
+
 ## 目录
 
 ```text
 yolov8-rk3588-cpp-3-15/
-├── src/                 # HTTP 服务与主逻辑
+├── src/                 # HTTP 服务源码（模块化）
 ├── include/             # 公共头文件
 ├── bytetrack/           # ByteTrack
 ├── deepsort/            # DeepSORT + ReID

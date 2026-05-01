@@ -821,7 +821,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import type { UploadProps, UploadUserFile } from 'element-plus'
@@ -983,7 +983,7 @@ type VideoSourceViewBackup = {
 const videoSourceDialogVisible = ref(false)
 const videoSourceLoading = ref(false)
 const videoSourceMode = ref<VideoSourceMode>('upload')
-const videoSourceLoop = ref(false)
+const videoSourceLoop = ref(true)
 const videoAutoInference = ref(true)
 const videoAutoTrack = ref(true)
 const videoStreamUrl = ref('')
@@ -1383,7 +1383,7 @@ const openVideoSourceDialog = async () => {
   pendingVideoFile.value = null
   uploadedVideoInfo.value = null
   videoUploadFiles.value = []
-  videoSourceLoop.value = false
+  videoSourceLoop.value = true
   applyDefaultVideoSourcePreset()
   videoSourceDialogVisible.value = true
   await syncVideoSourceStatusFromServer(true)
@@ -1496,7 +1496,7 @@ const handleStartVideoSource = async () => {
 
     await syncDetectionToggleFromServer(true)
     await syncVideoSourceStatusFromServer(true)
-    await sleep(isWebRtcStream ? 1800 : 1200)
+    await sleep(isWebRtcStream ? 5000 : 1200)
     showVideoSourceCamera()
     videoSourceDialogVisible.value = false
 
@@ -1548,8 +1548,39 @@ const reconcileVideoSourceView = async (silent = true) => {
   const showingVideoSource = displayCameras.value.some(camera => isVideoSourceCamera(camera))
 
   if (videoModeActive) {
-    if (showingVideoSource) {
+    if (!showingVideoSource) {
+      // 视频模式活跃但页面还没显示视频源 → 显示
       showVideoSourceCamera()
+    }
+    return
+  }
+
+  // 视频源意外停止（非循环视频播完），尝试以 loop=true 自动重启
+  if (showingVideoSource && videoSourceStatus.value.videoPath) {
+    try {
+      const res = await startVideoStream({
+        sourcePath: videoSourceStatus.value.videoPath,
+        loop: true,
+        startRtsp: true,
+        enableInference: videoAutoInference.value,
+        track: videoAutoInference.value ? videoAutoTrack.value : false,
+        tracker: trackerBackend.value
+      })
+      if (isRknnOperationSuccess(res?.data)) {
+        console.log('[VideoSource] 视频已自动重启(loop=true):', videoSourceStatus.value.videoPath)
+        await syncVideoSourceStatusFromServer(true)
+        // 清除再重建，让 VideoPlayer 重新挂载并重试 WHEP
+        clearVideoSourceCameraView()
+        await nextTick()
+        showVideoSourceCamera()
+        return
+      }
+    } catch (e) {
+      console.warn('[VideoSource] 自动重启失败:', e)
+    }
+    await completeCameraRestoreAfterVideoMode(silent)
+    if (!silent) {
+      ElMessage.warning('视频源已停止，页面已自动恢复到摄像头模式')
     }
     return
   }

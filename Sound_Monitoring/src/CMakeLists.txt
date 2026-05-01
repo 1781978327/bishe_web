@@ -37,6 +37,16 @@ add_executable(${PROJECT_NAME}
 # HTTP API 服务器版本
 add_executable(${PROJECT_NAME}_http
     main_http.cc
+    sound_globals.cpp
+    sound_report.cpp
+    sound_event_audio.cpp
+    sound_rt_monitor.cpp
+    sound_http_utils.cpp
+    sound_audio_config.cpp
+    sound_kws.cpp
+    sound_denoise.cpp
+    sound_offline.cpp
+    sound_http_handlers.cpp
     asr_vosk.cc
     audio_capture.c
     process.cc

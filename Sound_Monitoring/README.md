@@ -12,11 +12,33 @@
 - 紧急关键词唤醒监测
 - 声音异常与紧急关键词事件自动上报 Spring Boot
 
+## 源码结构
+
+```text
+Sound_Monitoring/src/
+├── main_http.cc                  # 服务入口（init_model + main）
+├── CMakeLists.txt                # CMake 构建配置
+├── sound_globals.h/.cpp          # 全局变量、常量、事件结构体
+├── sound_http_handlers.h/.cpp    # 路由处理函数 + 分发器 + 服务器线程
+├── sound_http_utils.h/.cpp       # JSON 转义、查询解析、HTTP 响应、信号处理
+├── sound_rt_monitor.h/.cpp       # 实时 YAMNet 推理线程、rt_start/stop
+├── sound_offline.h/.cpp          # 离线分析、异常事件管理、multipart 解析
+├── sound_denoise.h/.cpp          # FFmpeg 滤波 + SoX 降噪
+├── sound_event_audio.h/.cpp      # 事件音频存储、环形缓冲区
+├── sound_kws.h/.cpp              # 紧急关键词进程管理、上报线程
+├── sound_report.h/.cpp           # Spring Boot 自动上报
+├── sound_audio_config.h/.cpp     # YAML 配置解析、Pulse/ALSA 设备管理
+├── process.h                     # YAMNet 推理接口
+├── asr_vosk.h                    # Vosk ASR 接口
+├── audio_capture.h               # 音频采集接口
+└── yamnet.h                      # YAMNet 模型与标签
+```
+
 ## 目录
 
 ```text
 Sound_Monitoring/
-├── src/                 # HTTP 服务与主程序
+├── src/                 # HTTP 服务源码（模块化）
 ├── utils/               # 音频/文件工具
 ├── model/               # YAMNet 模型与标签
 ├── wake/                # 紧急关键词唤醒程序
@@ -37,17 +59,19 @@ cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring
 
 默认产物：
 
-- `build/rknn_yamnet_demo_http`
-- `build/lib/`
-- `build/model/`
-- `build/config/runtime_audio.yaml`
+- `src/build/rknn_yamnet_demo_http`
+- `src/build/lib/`（符号链接到 `build/lib/`）
+- `src/build/model/`（符号链接到 `build/model/`）
+- `src/build/config/`（符号链接到 `build/config/`）
+- `src/build/wake/`（符号链接到 `build/wake/`）
 - `build/wake/emergency_monitor`（检测到依赖时会自动构建）
 
-手动构建：
+手动 CMake 构建：
 
 ```bash
-cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/build
-cmake ../src
+cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/src
+mkdir -p build && cd build
+cmake ..
 make -j$(nproc)
 ```
 
@@ -55,12 +79,13 @@ make -j$(nproc)
 
 - `scripts/build.sh` 默认输出到 `Sound_Monitoring/build`
 - 根目录 `start_all_stack.sh` 会优先尝试 `Sound_Monitoring/src/build`，不存在时自动回退到 `Sound_Monitoring/build`
+- `src/build/` 下的 `lib/`、`model/`、`config/`、`wake/` 为符号链接，指向 `build/` 中的运行时依赖
 - 如果自动构建唤醒程序失败，可以单独执行 `bash ./scripts/build_wake_monitor.sh`
 
 ## 启动
 
 ```bash
-cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/build
+cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring/src/build
 export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
 sudo ./rknn_yamnet_demo_http 8089
 ```

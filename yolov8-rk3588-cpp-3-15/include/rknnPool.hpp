@@ -32,65 +32,46 @@
 #include "BYTETracker.h"
 
 // 动态标签名称，从txt文件加载
-static std::vector<std::string> coco_labels;
-static std::string g_label_file_override;
-static std::mutex g_label_file_mutex;
-static std::string g_label_cache_key;
+extern std::vector<std::string> coco_labels;
+extern std::string g_label_file_override;
+extern std::mutex g_label_file_mutex;
+extern std::string g_label_cache_key;
 
 enum class TrackerBackend {
     ByteTrack,
     DeepSort
 };
 
-struct TrackerResultItem {
-    int track_id = -1;
-    int label = -1;
-    float score = 0.0f;
-    float x1 = 0.0f;
-    float y1 = 0.0f;
-    float x2 = 0.0f;
-    float y2 = 0.0f;
-    bool active = false;
-    std::vector<std::pair<float, float>> trajectory;
-};
+// TrackerResultItem and DetectionResultItem are now defined in postprocess.h
 
-struct DetectionResultItem {
-    int label = -1;
-    float score = 0.0f;
-    float x1 = 0.0f;
-    float y1 = 0.0f;
-    float x2 = 0.0f;
-    float y2 = 0.0f;
-};
+extern TrackerBackend g_tracker_backend_override;
+extern std::string g_tracker_reid_model_override;
+extern int g_deepsort_skip_frames;
+extern std::mutex g_tracker_config_mutex;
+extern DeepSort* g_shared_deepsort_trackers[3];
+extern std::mutex g_shared_deepsort_init_mutex;
+extern std::mutex g_shared_deepsort_runtime_mutex[3];
+extern std::string g_shared_deepsort_model_path;
+extern std::atomic<long long> g_shared_deepsort_frame_counter[3];
+extern std::vector<DetectBox> g_shared_deepsort_last_detections[3];
+extern BYTETracker* g_shared_bytetrack_trackers[3];
+extern std::mutex g_shared_bytetrack_init_mutex;
+extern std::mutex g_shared_bytetrack_runtime_mutex[3];
+extern std::atomic<long long> g_shared_bytetrack_frame_counter[3];
 
-static TrackerBackend g_tracker_backend_override = TrackerBackend::ByteTrack;
-static std::string g_tracker_reid_model_override;
-static int g_deepsort_skip_frames = 0;
-static std::mutex g_tracker_config_mutex;
-static DeepSort* g_shared_deepsort_trackers[3] = {nullptr, nullptr, nullptr};
-static std::mutex g_shared_deepsort_init_mutex;
-static std::mutex g_shared_deepsort_runtime_mutex[3];
-static std::string g_shared_deepsort_model_path;
-static std::atomic<long long> g_shared_deepsort_frame_counter[3];
-static std::vector<DetectBox> g_shared_deepsort_last_detections[3];
-static BYTETracker* g_shared_bytetrack_trackers[3] = {nullptr, nullptr, nullptr};
-static std::mutex g_shared_bytetrack_init_mutex;
-static std::mutex g_shared_bytetrack_runtime_mutex[3];
-static std::atomic<long long> g_shared_bytetrack_frame_counter[3];
-
-static bool is_readable_file(const std::string& path) {
+inline bool is_readable_file(const std::string& path) {
     if (path.empty()) return false;
     std::ifstream file(path, std::ios::binary);
     return file.good();
 }
 
-static bool is_readable_directory(const std::string& path) {
+inline bool is_readable_directory(const std::string& path) {
     if (path.empty()) return false;
     struct stat st;
     return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static std::string dirname_copy(const std::string& path) {
+inline std::string dirname_copy(const std::string& path) {
     if (path.empty()) return "";
     size_t pos = path.find_last_of("/\\");
     if (pos == std::string::npos) return ".";
@@ -98,7 +79,7 @@ static std::string dirname_copy(const std::string& path) {
     return path.substr(0, pos);
 }
 
-static std::string join_path_copy(const std::string& base, const std::string& leaf) {
+inline std::string join_path_copy(const std::string& base, const std::string& leaf) {
     if (base.empty()) return leaf;
     if (leaf.empty()) return base;
     if (leaf[0] == '/') return leaf;
@@ -106,14 +87,14 @@ static std::string join_path_copy(const std::string& base, const std::string& le
     return base + "/" + leaf;
 }
 
-static bool looks_like_project_root_path(const std::string& path) {
+inline bool looks_like_project_root_path(const std::string& path) {
     return is_readable_directory(path) &&
            is_readable_directory(join_path_copy(path, "src")) &&
            is_readable_directory(join_path_copy(path, "model")) &&
            is_readable_file(join_path_copy(path, "CMakeLists.txt"));
 }
 
-static std::string resolve_project_root_path() {
+inline std::string resolve_project_root_path() {
     static std::string cached_root;
     if (!cached_root.empty()) return cached_root;
 
@@ -151,25 +132,25 @@ static std::string resolve_project_root_path() {
     return "";
 }
 
-static std::string resolve_project_file_path(const std::string& relative_path) {
+inline std::string resolve_project_file_path(const std::string& relative_path) {
     std::string root = resolve_project_root_path();
     if (root.empty()) return "";
     std::string candidate = join_path_copy(root, relative_path);
     return is_readable_file(candidate) ? candidate : "";
 }
 
-static std::string normalize_tracker_backend_name(const std::string& backend) {
+inline std::string normalize_tracker_backend_name(const std::string& backend) {
     std::string normalized = backend;
     std::transform(normalized.begin(), normalized.end(), normalized.begin(),
                    [](unsigned char ch) { return (char)std::tolower(ch); });
     return normalized;
 }
 
-static std::string tracker_backend_to_string(TrackerBackend backend) {
+inline std::string tracker_backend_to_string(TrackerBackend backend) {
     return backend == TrackerBackend::DeepSort ? "deepsort" : "bytetrack";
 }
 
-static bool parse_tracker_backend_name(const std::string& backend_name, TrackerBackend* backend_out) {
+inline bool parse_tracker_backend_name(const std::string& backend_name, TrackerBackend* backend_out) {
     std::string normalized = normalize_tracker_backend_name(backend_name);
     if (normalized.empty() || normalized == "bytetrack" || normalized == "byte" || normalized == "bt") {
         if (backend_out) *backend_out = TrackerBackend::ByteTrack;
@@ -182,7 +163,7 @@ static bool parse_tracker_backend_name(const std::string& backend_name, TrackerB
     return false;
 }
 
-static std::string resolve_reid_model_path_locked() {
+inline std::string resolve_reid_model_path_locked() {
     if (is_readable_file(g_tracker_reid_model_override)) {
         return g_tracker_reid_model_override;
     }
@@ -201,7 +182,7 @@ static std::string resolve_reid_model_path_locked() {
     return "";
 }
 
-static cv::Scalar tracker_color_from_id(int track_id) {
+inline cv::Scalar tracker_color_from_id(int track_id) {
     unsigned int seed = (unsigned int)(track_id < 0 ? -track_id : track_id);
     int b = 80 + (seed * 37) % 176;
     int g = 80 + (seed * 57) % 176;
@@ -209,7 +190,7 @@ static cv::Scalar tracker_color_from_id(int track_id) {
     return cv::Scalar(b, g, r);
 }
 
-static cv::Scalar tracker_color_from_label(int label) {
+inline cv::Scalar tracker_color_from_label(int label) {
     unsigned int seed = (unsigned int)(label < 0 ? -label : label);
     int b = 80 + (seed * 29) % 176;
     int g = 80 + (seed * 43) % 176;
@@ -217,7 +198,7 @@ static cv::Scalar tracker_color_from_label(int label) {
     return cv::Scalar(b, g, r);
 }
 
-static std::string trim_ascii_space(const std::string& text) {
+inline std::string trim_ascii_space(const std::string& text) {
     size_t begin = 0;
     while (begin < text.size() && std::isspace((unsigned char)text[begin])) {
         ++begin;
@@ -229,7 +210,7 @@ static std::string trim_ascii_space(const std::string& text) {
     return text.substr(begin, end - begin);
 }
 
-static bool has_ascii_token(const std::string& text, const std::string& token) {
+inline bool has_ascii_token(const std::string& text, const std::string& token) {
     if (text.empty() || token.empty()) return false;
     size_t pos = 0;
     while (true) {
@@ -244,7 +225,7 @@ static bool has_ascii_token(const std::string& text, const std::string& token) {
     }
 }
 
-static bool tracker_label_is_person(int label) {
+inline bool tracker_label_is_person(int label) {
     if (label < 0) return false;
     if (coco_labels.empty()) return label == 0;
     if (label >= (int)coco_labels.size()) return false;
@@ -268,7 +249,7 @@ static bool tracker_label_is_person(int label) {
     return false;
 }
 
-static cv::Scalar tracker_color_for_item(int label, int track_id) {
+inline cv::Scalar tracker_color_for_item(int label, int track_id) {
     if (tracker_label_is_person(label)) {
         return cv::Scalar(0, 255, 0);
     }
@@ -278,21 +259,21 @@ static cv::Scalar tracker_color_for_item(int label, int track_id) {
     return tracker_color_from_id(track_id);
 }
 
-static int clamp_coord_int(float value, int max_value) {
+inline int clamp_coord_int(float value, int max_value) {
     int ivalue = (int)value;
     if (ivalue < 0) return 0;
     if (ivalue > max_value) return max_value;
     return ivalue;
 }
 
-static int sanitize_deepsort_skip_frames(int skip_frames) {
+inline int sanitize_deepsort_skip_frames(int skip_frames) {
     if (skip_frames < 0) return 0;
     if (skip_frames > 10) return 10;
     return skip_frames;
 }
 
 // 轨迹绘制点数上限（可通过环境变量 TRACK_DRAW_TRAIL_POINTS 调整）
-static int get_track_draw_points_limit() {
+inline int get_track_draw_points_limit() {
     static int cached_limit = -1;
     if (cached_limit > 0) return cached_limit;
 
@@ -309,21 +290,21 @@ static int get_track_draw_points_limit() {
 }
 
 // FPS 计算变量
-static int fps_frame_count = 0;
-static double fps_last_time = 0.0;
-static double current_fps = 0.0;
-static std::atomic<int> g_preprocess_rgb_iomem_log_counter(0);
-static std::atomic<int> g_preprocess_camera_iomem_log_counter(0);
-static std::atomic<int> g_preprocess_video_iomem_log_counter(0);
-static std::atomic<int> g_preprocess_legacy_log_counter(0);
-static std::atomic<int> g_preprocess_video_iomem_fail_counter(0);
-static std::atomic<int> g_preprocess_video_iomem_fallback_counter(0);
-static std::atomic<bool> g_preprocess_video_iomem_disabled(false);
+extern int fps_frame_count;
+extern double fps_last_time;
+extern double current_fps;
+extern std::atomic<int> g_preprocess_rgb_iomem_log_counter;
+extern std::atomic<int> g_preprocess_camera_iomem_log_counter;
+extern std::atomic<int> g_preprocess_video_iomem_log_counter;
+extern std::atomic<int> g_preprocess_legacy_log_counter;
+extern std::atomic<int> g_preprocess_video_iomem_fail_counter;
+extern std::atomic<int> g_preprocess_video_iomem_fallback_counter;
+extern std::atomic<bool> g_preprocess_video_iomem_disabled;
 // OpenCV 绘制耗时累计（供主流程按窗口打印平均值）
-static std::atomic<long long> g_opencv_draw_total_us(0);
-static std::atomic<long long> g_opencv_draw_sample_count(0);
+extern std::atomic<long long> g_opencv_draw_total_us;
+extern std::atomic<long long> g_opencv_draw_sample_count;
 
-static bool load_labels_from_txt(const std::string& label_path) {
+inline bool load_labels_from_txt(const std::string& label_path) {
     std::ifstream file(label_path);
     if (!file.is_open()) {
         return false;
@@ -350,7 +331,7 @@ static bool load_labels_from_txt(const std::string& label_path) {
     return true;
 }
 
-static bool load_model_specific_labels(const std::string& model_path, const std::string& model_name) {
+inline bool load_model_specific_labels(const std::string& model_path, const std::string& model_name) {
     if (model_name.empty()) return false;
 
     std::string stem = model_name;
@@ -396,7 +377,7 @@ static bool load_model_specific_labels(const std::string& model_path, const std:
 // 加载标签文件：自动检测模型对应的标签文件
 // yolov8n/yolov8s/yolov8m → 使用 coco_80_labels_list.txt
 // 行人摔倒.rknn → 使用同目录下的 Untitled 文件或默认4类标签
-static void load_labels(const char* model_path) {
+inline void load_labels(const char* model_path) {
     std::string model_path_text = model_path ? model_path : "";
     std::string model_name = model_path_text;
     size_t pos = model_name.find_last_of("/\\");
@@ -565,12 +546,10 @@ private:
     std::vector<DetectionResultItem> last_detections_;  // 最后一帧的检测框结果
 };
 
-// 静态成员初始化
-std::atomic<float> rknn_lite::detection_threshold(0.5f);
-std::atomic<int> rknn_lite::last_detection_count(0);
+// 静态成员定义在 rknn_pool_data.cpp
 
 // 构造函数：初始化RKNN模型
-rknn_lite::rknn_lite(char* model_path, int core_id) {
+inline rknn_lite::rknn_lite(char* model_path, int core_id) {
     memset(&app_ctx, 0, sizeof(rknn_app_context_t));
     bytetrack_ = nullptr;
     frame_count_ = 0;
@@ -723,7 +702,7 @@ rknn_lite::rknn_lite(char* model_path, int core_id) {
 }
 
 // 析构函数：释放资源
-rknn_lite::~rknn_lite() {
+inline rknn_lite::~rknn_lite() {
     release_video_rgb_stage_buffer();
     if (input_mem_ != nullptr && app_ctx.rknn_ctx != 0) {
         rknn_destroy_mem(app_ctx.rknn_ctx, input_mem_);
@@ -749,7 +728,7 @@ rknn_lite::~rknn_lite() {
 }
 
 // BGR转RGB函数（使用RGA加速）
-int rknn_lite::RGA_bgr_to_rgb(const cv::Mat& bgr_image, cv::Mat &rgb_image) {
+inline int rknn_lite::RGA_bgr_to_rgb(const cv::Mat& bgr_image, cv::Mat &rgb_image) {
     // 创建输出图像
     rgb_image.create(bgr_image.size(), bgr_image.type());
     
@@ -782,7 +761,7 @@ int rknn_lite::RGA_bgr_to_rgb(const cv::Mat& bgr_image, cv::Mat &rgb_image) {
 }
 
 // 图像缩放函数（使用RGA加速）
-int rknn_lite::RGA_resize(const cv::Mat& src, cv::Mat& dst, int dst_width, int dst_height) {
+inline int rknn_lite::RGA_resize(const cv::Mat& src, cv::Mat& dst, int dst_width, int dst_height) {
     // 创建目标图像
     dst.create(dst_height, dst_width, src.type());
     
@@ -811,7 +790,7 @@ int rknn_lite::RGA_resize(const cv::Mat& src, cv::Mat& dst, int dst_width, int d
     return 0;
 }
 
-void rknn_lite::set_video_dmabuf_frame(int fd, int size, int width, int height, int wstride, int hstride, uint32_t drm_format) {
+inline void rknn_lite::set_video_dmabuf_frame(int fd, int size, int width, int height, int wstride, int hstride, uint32_t drm_format) {
     clear_video_dmabuf_frame();
     if (fd < 0 || size <= 0 || width <= 0 || height <= 0) {
         return;
@@ -826,7 +805,7 @@ void rknn_lite::set_video_dmabuf_frame(int fd, int size, int width, int height, 
     video_dmabuf_frame_.drm_format = drm_format;
 }
 
-void rknn_lite::set_video_nv12_frame(const cv::Mat& nv12_frame, int width, int height, int wstride, int hstride) {
+inline void rknn_lite::set_video_nv12_frame(const cv::Mat& nv12_frame, int width, int height, int wstride, int hstride) {
     if (nv12_frame.empty() || width <= 0 || height <= 0) {
         return;
     }
@@ -838,7 +817,7 @@ void rknn_lite::set_video_nv12_frame(const cv::Mat& nv12_frame, int width, int h
     video_nv12_hstride_ = hstride > 0 ? hstride : height;
 }
 
-void rknn_lite::clear_video_dmabuf_frame() {
+inline void rknn_lite::clear_video_dmabuf_frame() {
     if (video_dmabuf_frame_.fd >= 0) {
         close(video_dmabuf_frame_.fd);
     }
@@ -851,7 +830,7 @@ void rknn_lite::clear_video_dmabuf_frame() {
     video_nv12_hstride_ = 0;
 }
 
-bool rknn_lite::upload_rgb_to_input_mem(const cv::Mat& rgb_image) {
+inline bool rknn_lite::upload_rgb_to_input_mem(const cv::Mat& rgb_image) {
     if (!input_mem_ready_ || !input_mem_ || rgb_image.empty()) {
         return false;
     }
@@ -892,7 +871,7 @@ bool rknn_lite::upload_rgb_to_input_mem(const cv::Mat& rgb_image) {
     return true;
 }
 
-bool rknn_lite::upload_rgb_fd_to_input_mem(int fd, int width, int height, int wstride, int hstride) {
+inline bool rknn_lite::upload_rgb_fd_to_input_mem(int fd, int width, int height, int wstride, int hstride) {
     if (!input_mem_ready_ || !input_mem_ || fd < 0 || width <= 0 || height <= 0) {
         return false;
     }
@@ -925,7 +904,7 @@ bool rknn_lite::upload_rgb_fd_to_input_mem(int fd, int width, int height, int ws
     return status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR;
 }
 
-bool rknn_lite::prepare_camera_dmabuf_input(int fd, int width, int height,
+inline bool rknn_lite::prepare_camera_dmabuf_input(int fd, int width, int height,
                                             int wstride, int hstride, int rga_format) {
     external_input_mem_ready_ = false;
     if (!input_mem_ready_ || !input_mem_ || fd < 0 || width <= 0 || height <= 0) {
@@ -970,14 +949,14 @@ bool rknn_lite::prepare_camera_dmabuf_input(int fd, int width, int height,
     return true;
 }
 
-void rknn_lite::release_video_rgb_stage_buffer() {
+inline void rknn_lite::release_video_rgb_stage_buffer() {
     if (video_rgb_stage_buffer_.buffer) {
         mpp_buffer_put(video_rgb_stage_buffer_.buffer);
     }
     video_rgb_stage_buffer_ = VideoRgbStageBuffer{};
 }
 
-bool rknn_lite::ensure_video_rgb_stage_buffer(int width, int height) {
+inline bool rknn_lite::ensure_video_rgb_stage_buffer(int width, int height) {
     if (width <= 0 || height <= 0) return false;
 
     if (video_rgb_stage_buffer_.buffer &&
@@ -1014,7 +993,7 @@ bool rknn_lite::ensure_video_rgb_stage_buffer(int width, int height) {
     return true;
 }
 
-bool rknn_lite::preprocess_video_dmabuf_via_rgb_stage() {
+inline bool rknn_lite::preprocess_video_dmabuf_via_rgb_stage() {
     if (!video_dmabuf_frame_.valid || video_dmabuf_frame_.fd < 0 ||
         video_dmabuf_frame_.width <= 0 || video_dmabuf_frame_.height <= 0 ||
         video_dmabuf_frame_.wstride <= 0 || video_dmabuf_frame_.hstride <= 0 ||
@@ -1058,7 +1037,7 @@ bool rknn_lite::preprocess_video_dmabuf_via_rgb_stage() {
                                       video_rgb_stage_buffer_.hstride);
 }
 
-bool rknn_lite::preprocess_video_dmabuf_to_input_mem() {
+inline bool rknn_lite::preprocess_video_dmabuf_to_input_mem() {
     if (g_preprocess_video_iomem_disabled.load()) {
         return preprocess_video_dmabuf_via_rgb_stage();
     }
@@ -1145,7 +1124,7 @@ bool rknn_lite::preprocess_video_dmabuf_to_input_mem() {
     return true;
 }
 
-bool rknn_lite::preprocess_video_nv12_to_input_mem() {
+inline bool rknn_lite::preprocess_video_nv12_to_input_mem() {
     if (!input_mem_ready_ || !input_mem_ || !video_nv12_valid_ || video_nv12_frame_.empty() ||
         video_nv12_width_ <= 0 || video_nv12_height_ <= 0) {
         return false;
@@ -1203,7 +1182,7 @@ bool rknn_lite::preprocess_video_nv12_to_input_mem() {
     return true;
 }
 
-int rknn_lite::draw_tracker_results(cv::Mat& img, const std::vector<TrackerResultItem>& tracks) {
+inline int rknn_lite::draw_tracker_results(cv::Mat& img, const std::vector<TrackerResultItem>& tracks) {
     char text[256];
     int drawn = 0;
     const int min_dim = std::min(img.cols, img.rows);
@@ -1254,7 +1233,7 @@ int rknn_lite::draw_tracker_results(cv::Mat& img, const std::vector<TrackerResul
     return drawn;
 }
 
-int rknn_lite::draw_unmatched_detections(cv::Mat& img, const object_detect_result_list& od_results,
+inline int rknn_lite::draw_unmatched_detections(cv::Mat& img, const object_detect_result_list& od_results,
                                          const std::vector<TrackerResultItem>& tracks) {
     char text[256];
     int drawn = 0;
@@ -1303,7 +1282,7 @@ int rknn_lite::draw_unmatched_detections(cv::Mat& img, const object_detect_resul
     return drawn;
 }
 
-std::vector<TrackerResultItem> rknn_lite::update_bytetrack(const object_detect_result_list& od_results) {
+inline std::vector<TrackerResultItem> rknn_lite::update_bytetrack(const object_detect_result_list& od_results) {
     last_tracker_feature_match_ = true;
     std::vector<Object> objects;
     for (int i = 0; i < od_results.count; i++) {
@@ -1355,7 +1334,7 @@ std::vector<TrackerResultItem> rknn_lite::update_bytetrack(const object_detect_r
     return results;
 }
 
-std::vector<TrackerResultItem> rknn_lite::update_deepsort(cv::Mat& img, const object_detect_result_list& od_results) {
+inline std::vector<TrackerResultItem> rknn_lite::update_deepsort(cv::Mat& img, const object_detect_result_list& od_results) {
     static std::atomic<int> deepsort_debug_counter(0);
     std::vector<TrackerResultItem> results;
     if (od_results.count <= 0) {
@@ -1497,7 +1476,7 @@ std::vector<TrackerResultItem> rknn_lite::update_deepsort(cv::Mat& img, const ob
 }
 
 // 推理接口函数
-int rknn_lite::interf() {
+inline int rknn_lite::interf() {
     fps_frame_count++;
     double current_time = (double)cv::getTickCount() / cv::getTickFrequency();
     if (fps_last_time == 0.0) fps_last_time = current_time;
@@ -1650,12 +1629,12 @@ int rknn_lite::interf() {
 }
 
 // 设置是否使用跟踪器
-void rknn_lite::set_use_tracker(bool use) {
+inline void rknn_lite::set_use_tracker(bool use) {
     use_tracker_this_frame_ = use && enable_tracker_;
 }
 
 // 设置检测置信度阈值
-void rknn_lite::set_detection_threshold(float threshold) {
+inline void rknn_lite::set_detection_threshold(float threshold) {
     if (threshold < 0.0f) threshold = 0.0f;
     if (threshold > 1.0f) threshold = 1.0f;
     detection_threshold.store(threshold);
@@ -1663,24 +1642,24 @@ void rknn_lite::set_detection_threshold(float threshold) {
 }
 
 // 获取检测置信度阈值
-float rknn_lite::get_detection_threshold() {
+inline float rknn_lite::get_detection_threshold() {
     return detection_threshold.load();
 }
 
 // 设置标签文件覆盖路径（空字符串表示使用默认标签）
-void rknn_lite::set_label_file_override(const std::string& label_file) {
+inline void rknn_lite::set_label_file_override(const std::string& label_file) {
     std::lock_guard<std::mutex> lock(g_label_file_mutex);
     g_label_file_override = label_file;
     g_label_cache_key.clear();
 }
 
 // 获取标签文件覆盖路径
-std::string rknn_lite::get_label_file_override() {
+inline std::string rknn_lite::get_label_file_override() {
     std::lock_guard<std::mutex> lock(g_label_file_mutex);
     return g_label_file_override;
 }
 
-bool rknn_lite::set_tracker_backend(const std::string& backend_name) {
+inline bool rknn_lite::set_tracker_backend(const std::string& backend_name) {
     TrackerBackend backend;
     if (!parse_tracker_backend_name(backend_name, &backend)) {
         return false;
@@ -1698,12 +1677,12 @@ bool rknn_lite::set_tracker_backend(const std::string& backend_name) {
     return true;
 }
 
-std::string rknn_lite::get_tracker_backend_name() {
+inline std::string rknn_lite::get_tracker_backend_name() {
     std::lock_guard<std::mutex> lock(g_tracker_config_mutex);
     return tracker_backend_to_string(g_tracker_backend_override);
 }
 
-void rknn_lite::set_tracker_reid_model_override(const std::string& model_file) {
+inline void rknn_lite::set_tracker_reid_model_override(const std::string& model_file) {
     {
         std::lock_guard<std::mutex> lock(g_tracker_config_mutex);
         g_tracker_reid_model_override = model_file;
@@ -1711,27 +1690,27 @@ void rknn_lite::set_tracker_reid_model_override(const std::string& model_file) {
     reset_shared_deepsort_trackers();
 }
 
-std::string rknn_lite::get_tracker_reid_model_override() {
+inline std::string rknn_lite::get_tracker_reid_model_override() {
     std::lock_guard<std::mutex> lock(g_tracker_config_mutex);
     return g_tracker_reid_model_override;
 }
 
-std::string rknn_lite::resolve_tracker_reid_model() {
+inline std::string rknn_lite::resolve_tracker_reid_model() {
     std::lock_guard<std::mutex> lock(g_tracker_config_mutex);
     return resolve_reid_model_path_locked();
 }
 
-void rknn_lite::set_deepsort_skip_frames(int skip_frames) {
+inline void rknn_lite::set_deepsort_skip_frames(int skip_frames) {
     std::lock_guard<std::mutex> lock(g_tracker_config_mutex);
     g_deepsort_skip_frames = sanitize_deepsort_skip_frames(skip_frames);
 }
 
-int rknn_lite::get_deepsort_skip_frames() {
+inline int rknn_lite::get_deepsort_skip_frames() {
     std::lock_guard<std::mutex> lock(g_tracker_config_mutex);
     return g_deepsort_skip_frames;
 }
 
-void rknn_lite::reset_shared_deepsort_trackers() {
+inline void rknn_lite::reset_shared_deepsort_trackers() {
     std::lock_guard<std::mutex> lock(g_shared_deepsort_init_mutex);
     for (DeepSort*& tracker : g_shared_deepsort_trackers) {
         if (tracker != nullptr) {
@@ -1746,7 +1725,7 @@ void rknn_lite::reset_shared_deepsort_trackers() {
     }
 }
 
-void rknn_lite::reset_shared_bytetrack_trackers() {
+inline void rknn_lite::reset_shared_bytetrack_trackers() {
     std::lock_guard<std::mutex> lock(g_shared_bytetrack_init_mutex);
     for (BYTETracker*& tracker : g_shared_bytetrack_trackers) {
         if (tracker != nullptr) {
@@ -1759,13 +1738,13 @@ void rknn_lite::reset_shared_bytetrack_trackers() {
     }
 }
 
-void rknn_lite::set_tracker_stream_id(int stream_id) {
+inline void rknn_lite::set_tracker_stream_id(int stream_id) {
     if (stream_id < 0) stream_id = 0;
     if (stream_id > 2) stream_id = 2;
     tracker_stream_id_ = stream_id;
 }
 
-BYTETracker* rknn_lite::ensure_shared_bytetrack_tracker() {
+inline BYTETracker* rknn_lite::ensure_shared_bytetrack_tracker() {
     if (tracker_backend_ != TrackerBackend::ByteTrack) {
         return nullptr;
     }
@@ -1782,7 +1761,7 @@ BYTETracker* rknn_lite::ensure_shared_bytetrack_tracker() {
     return g_shared_bytetrack_trackers[stream_id];
 }
 
-DeepSort* rknn_lite::ensure_shared_deepsort_tracker() {
+inline DeepSort* rknn_lite::ensure_shared_deepsort_tracker() {
     if (tracker_backend_ != TrackerBackend::DeepSort || reid_model_path_.empty() || !is_readable_file(reid_model_path_)) {
         return nullptr;
     }
@@ -1811,7 +1790,7 @@ DeepSort* rknn_lite::ensure_shared_deepsort_tracker() {
     return g_shared_deepsort_trackers[stream_id];
 }
 
-void rknn_lite::cache_last_detections(const object_detect_result_list& od_results) {
+inline void rknn_lite::cache_last_detections(const object_detect_result_list& od_results) {
     last_detections_.clear();
     if (od_results.count <= 0) return;
     last_detections_.reserve((size_t)od_results.count);
@@ -1829,7 +1808,7 @@ void rknn_lite::cache_last_detections(const object_detect_result_list& od_result
 }
 
 // 仅检测模式：不绘制结果，只返回检测结果
-int rknn_lite::interf_detect_only() {
+inline int rknn_lite::interf_detect_only() {
     static std::atomic<int> infer_debug_counter(0);
 
     cv::Mat img;

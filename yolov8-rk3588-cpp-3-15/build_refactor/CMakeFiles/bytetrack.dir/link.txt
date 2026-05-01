@@ -1,0 +1,2 @@
+/usr/bin/ar qc libbytetrack.a  CMakeFiles/bytetrack.dir/bytetrack/src/BYTETracker.cpp.o CMakeFiles/bytetrack.dir/bytetrack/src/STrack.cpp.o CMakeFiles/bytetrack.dir/bytetrack/src/kalmanFilter.cpp.o CMakeFiles/bytetrack.dir/bytetrack/src/lapjv.cpp.o
+/usr/bin/ranlib libbytetrack.a

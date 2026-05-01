@@ -61,17 +61,47 @@ bishebeifen-master/
 ├── stop_all_stack.sh             # 一键停止脚本
 ├── .runtime/                     # 运行时配置目录
 ├── Hardware/                     # 硬件传感器HTTP服务
-│   ├── sensor_reader_http.cpp    # 传感器数据采集服务
-│   ├── README.md                 # 硬件模块文档
-│   └── ...
+│   ├── sensor_reader_http.cpp    # 服务入口（main + signal）
+│   ├── CMakeLists.txt            # CMake 构建配置
+│   ├── src/                      # 模块化源码
+│   │   ├── dht11_module.h/.cpp   #   DHT11 温湿度读取
+│   │   ├── ads1115_module.h/.cpp #   ADS1115/MQ-2/光照
+│   │   └── sensor_http_server.h/.cpp  # HTTP 服务与轮询
+│   └── README.md                 # 硬件模块文档
 ├── Sound_Monitoring/             # 声音检测HTTP服务
-│   ├── src/main_http.cc          # 声音检测服务主程序
-│   ├── README.md                 # 声音模块文档
-│   └── ...
+│   ├── src/
+│   │   ├── main_http.cc          #   服务入口（init_model + main）
+│   │   ├── sound_globals.h/.cpp  #   全局变量与常量
+│   │   ├── sound_http_handlers.h/.cpp  # 路由分发与处理
+│   │   ├── sound_http_utils.h/.cpp     # HTTP/JSON 工具
+│   │   ├── sound_rt_monitor.h/.cpp     # 实时监测线程
+│   │   ├── sound_offline.h/.cpp        # 离线分析
+│   │   ├── sound_denoise.h/.cpp        # 降噪处理
+│   │   ├── sound_event_audio.h/.cpp    # 事件音频存储
+│   │   ├── sound_kws.h/.cpp            # 紧急关键词唤醒
+│   │   ├── sound_report.h/.cpp         # Spring Boot 上报
+│   │   └── sound_audio_config.h/.cpp   # YAML 配置解析
+│   └── README.md                 # 声音模块文档
 ├── yolov8-rk3588-cpp-3-15/       # 视觉识别HTTP服务
-│   ├── src/main_http_ctrl.cc     # 视觉控制服务主程序
-│   ├── README.md                 # 视觉模块文档
-│   └── ...
+│   ├── src/
+│   │   ├── main_http_ctrl.cc     #   服务入口（banner + main 推理循环）
+│   │   ├── http_ctrl_globals.h/.cpp    # 全局变量与结构体
+│   │   ├── http_ctrl_routes.h/.cpp     # 路由分发与处理
+│   │   ├── http_ctrl_utils.h/.cpp      # 文件/路径工具
+│   │   ├── http_ctrl_model.h/.cpp      # 模型加载/卸载
+│   │   ├── http_ctrl_rtsp.h/.cpp       # RTSP 推流
+│   │   ├── http_ctrl_recording.h/.cpp  # 摄像头录像
+│   │   ├── http_ctrl_alerts.h/.cpp     # 检测报警/禁区
+│   │   ├── http_ctrl_video.h/.cpp      # 视频文件模式
+│   │   ├── http_ctrl_tracker_draw.h/.cpp  # 跟踪框绘制
+│   │   ├── http_ctrl_v4l2_auto.h/.cpp  # V4L2 摄像头检测
+│   │   ├── http_ctrl_mediamtx.h/.cpp   # mediamtx 管理
+│   │   ├── http_ctrl_usage_monitor.h/.cpp  # CPU/NPU 监控
+│   │   ├── http_ctrl_http_client.h/.cpp  # HTTP 客户端
+│   │   ├── http_ctrl_camera_io.h/.cpp  # 摄像头帧采集
+│   │   └── http_ctrl_web_utils.h/.cpp  # Web 工具
+│   ├── include/                  # 头文件目录
+│   └── README.md                 # 视觉模块文档
 ├── web-springboot/               # Spring Boot后端服务
 │   ├── demo3/demo/               # 主应用模块
 │   └── ...
@@ -115,14 +145,15 @@ cd /home/orangepi/Desktop/web/bishebeifen-master
 #### 1. 启动硬件传感器服务
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/Hardware
-sudo ./sensor_reader_http
+mkdir -p build && cd build && cmake .. && make -j$(nproc)
+cd .. && sudo ./build/sensor_reader_http
 ```
 
 #### 2. 启动声音检测服务
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/Sound_Monitoring
 ./scripts/build.sh  # 首次运行需编译
-cd build
+cd src/build
 export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
 sudo ./rknn_yamnet_demo_http 8089
 ```

@@ -10,6 +10,21 @@
 
 Spring Boot 默认通过 `http://localhost:8088` 调用本服务。
 
+## 源码结构
+
+```text
+Hardware/
+├── sensor_reader_http.cpp       # 服务入口（main + signal）
+├── CMakeLists.txt               # CMake 构建配置
+├── src/
+│   ├── dht11_module.h/.cpp      # DHT11 温湿度读取（GPIO bit-bang）
+│   ├── ads1115_module.h/.cpp    # ADS1115 I2C、MQ-2 烟雾、光照转换
+│   └── sensor_http_server.h/.cpp # libmicrohttpd 服务、JSON、轮询线程
+├── dht11/                       # DHT11 独立测试程序
+├── ads1115/                     # ADS1115 独立测试程序
+└── build/                       # CMake 构建输出目录
+```
+
 ## 硬件映射
 
 - `DHT11` 数据脚：`wiringPi pin 2`，对应物理引脚 `7`
@@ -34,14 +49,21 @@ sudo apt install wiringpi libmicrohttpd-dev
 
 ```bash
 cd /home/orangepi/Desktop/web/bishebeifen-master/Hardware
-g++ -std=c++17 -O2 -Wall sensor_reader_http.cpp -o sensor_reader_http \
-  -lwiringPi -lmicrohttpd -pthread
+mkdir -p build && cd build
+cmake ..
+make -j$(nproc)
 ```
 
-说明：
+产物位于 `build/sensor_reader_http`。
 
-- 仓库里已经包含一个已编译的 `sensor_reader_http`
-- 能否直接运行，仍取决于当前板卡环境和库版本
+手动编译（兼容旧方式）：
+
+```bash
+cd /home/orangepi/Desktop/web/bishebeifen-master/Hardware
+g++ -std=c++17 -O2 -Wall sensor_reader_http.cpp \
+  src/dht11_module.cpp src/ads1115_module.cpp src/sensor_http_server.cpp \
+  -Isrc -o sensor_reader_http -lwiringPi -lmicrohttpd -pthread
+```
 
 ## 启动
 

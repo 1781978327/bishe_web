@@ -1,0 +1,7 @@
+/home/orangepi/Desktop/web/bishebeifen-master/Hardware/build/CMakeFiles/install/local.dir
+/home/orangepi/Desktop/web/bishebeifen-master/Hardware/build/CMakeFiles/install.dir
+/home/orangepi/Desktop/web/bishebeifen-master/Hardware/build/CMakeFiles/list_install_components.dir
+/home/orangepi/Desktop/web/bishebeifen-master/Hardware/build/CMakeFiles/rebuild_cache.dir
+/home/orangepi/Desktop/web/bishebeifen-master/Hardware/build/CMakeFiles/edit_cache.dir
+/home/orangepi/Desktop/web/bishebeifen-master/Hardware/build/CMakeFiles/install/strip.dir
+/home/orangepi/Desktop/web/bishebeifen-master/Hardware/build/CMakeFiles/sensor_reader_http.dir

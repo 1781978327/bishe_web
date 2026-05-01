@@ -645,12 +645,38 @@ public class RknnService {
         }
 
         if (startRtsp) {
+            // Wait for the main inference loop to pick up video mode and start decoding.
+            // Without this delay, the RTSP sender may be created before any frame is
+            // available, causing the first push to fail and rtsp_streaming to be reset.
+            try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+
             Map<String, Object> rtspStartResult = startVideoRtsp();
             result.put("rtspStart", rtspStartResult);
+            if (!isOperationSuccess(rtspStartResult)) {
+                // Retry once after a short delay
+                try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+                rtspStartResult = startVideoRtsp();
+                result.put("rtspStart", rtspStartResult);
+            }
             if (!isOperationSuccess(rtspStartResult)) {
                 result.put("success", false);
                 result.put("error", extractOperationError(rtspStartResult, "启动视频推流失败"));
                 return result;
+            }
+
+            // Verify rtsp_streaming is actually true; retry if not
+            for (int attempt = 0; attempt < 5; attempt++) {
+                try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+                Map<String, Object> status = getStatus();
+                Object streaming = status.get("rtsp_streaming");
+                if (Boolean.TRUE.equals(streaming) || "true".equals(String.valueOf(streaming))) {
+                    log.info("视频推流已确认就绪 (attempt {})", attempt + 1);
+                    break;
+                }
+                if (attempt < 4) {
+                    log.warn("rtsp_streaming 仍为 false，重试开启推流 (attempt {})", attempt + 1);
+                    startVideoRtsp();
+                }
             }
         }
 
