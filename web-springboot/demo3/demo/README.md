@@ -52,9 +52,10 @@ sound.server.port=8089
 rknn.server.host=localhost
 rknn.server.port=8091
 
-ai.analysis.base-url=${VISION_BASE_URL:https://api.866646.xyz}
+ai.analysis.base-url=${VISION_BASE_URL:https://maas-coding-api.cn-huabei-1.xf-yun.com/v2}
 ai.analysis.api-key=${VISION_API_KEY:}
-ai.analysis.model=${RISK_MODEL:qwen3-vl:235b-instruct}
+ai.analysis.model=${RISK_MODEL:astron-code-latest}
+ai.analysis.enable-images=${AI_ANALYSIS_ENABLE_IMAGES:true}
 ```
 
 ## 统一响应格式
@@ -226,8 +227,9 @@ ai.analysis.model=${RISK_MODEL:qwen3-vl:235b-instruct}
 
 ```bash
 export VISION_API_KEY='你的 key'
-export VISION_BASE_URL='https://api.866646.xyz/'
-export RISK_MODEL='qwen3-vl:235b-instruct'
+export VISION_BASE_URL='https://maas-coding-api.cn-huabei-1.xf-yun.com/v2'
+export RISK_MODEL='astron-code-latest'
+export AI_ANALYSIS_ENABLE_IMAGES='1'
 ```
 
 如果主要使用根目录一键脚本，也可以把这些变量写到：

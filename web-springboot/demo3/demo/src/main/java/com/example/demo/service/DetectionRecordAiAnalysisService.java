@@ -64,6 +64,9 @@ public class DetectionRecordAiAnalysisService {
     @Value("${ai.analysis.model:qwen3-vl:235b-instruct}")
     private String aiAnalysisModel;
 
+    @Value("${ai.analysis.enable-images:true}")
+    private boolean aiAnalysisEnableImages;
+
     @Value("${ai.analysis.sensor-history-size:2}")
     private int sensorHistorySize;
 
@@ -116,7 +119,8 @@ public class DetectionRecordAiAnalysisService {
         try {
             Map<String, Object> context = buildAnalysisContext(initialRecord);
             List<ImageSnapshot> images = collectImages(initialRecord);
-            String prompt = buildPrompt(context, images);
+            boolean sendImages = supportsImageInputs();
+            String prompt = buildPrompt(context, images, sendImages);
             String aiContent = callAi(prompt, images);
             updateAnalysisResult(initialRecord, "SUCCESS", aiContent);
             log.info("AI融合分析完成: recordId={}, status=SUCCESS", recordId);
@@ -285,12 +289,14 @@ public class DetectionRecordAiAnalysisService {
         }
     }
 
-    private String buildPrompt(Map<String, Object> context, List<ImageSnapshot> images) throws IOException {
+    private String buildPrompt(Map<String, Object> context, List<ImageSnapshot> images, boolean sendImages) throws IOException {
         String contextJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(context);
         return ""
             + "请根据下面的校园安全监测数据做一次跨服务融合研判。\n"
             + "你拿到的是某一条刚上报的异常记录，以及环境监测、声音监测、视觉监测三路的最新状态。\n"
-            + "如果附带了图片，请结合图片判断现场是否存在人员冲突、跌倒、闯入、拥挤、异常行为或明显环境风险。\n"
+            + (sendImages
+                ? "如果附带了图片，请结合图片判断现场是否存在人员冲突、跌倒、闯入、拥挤、异常行为或明显环境风险。\n"
+                : "当前接入模型仅支持文本输入，图片不会发送给模型，请仅基于文本上下文做融合分析，并明确说明这一限制。\n")
             + "如果数据源缺失，请明确写出不确定性，不要编造。\n"
             + "必须只返回严格 JSON，不要输出 Markdown，不要加代码块。\n\n"
             + "返回格式：\n"
@@ -305,10 +311,11 @@ public class DetectionRecordAiAnalysisService {
             + "补充要求：\n"
             + "- risk_level 取值范围 1 到 5。\n"
             + "- trigger_event_type 要根据触发记录判断。\n"
-            + "- 如果图片不可用，也要仅基于文本信息继续分析。\n"
+            + "- 如果图片不可用，或当前模型不支持图片输入，也要仅基于文本信息继续分析。\n"
             + "- 交叉研判时要关注最近 2 条传感器数据、最近声音窗口、视觉检测计数与当前触发事件之间是否互相印证。\n"
             + "- 如果当前触发记录本身已经是明显异常，要在 summary 里说清楚。\n"
-            + "- 当前附图数量：" + images.size() + "。\n\n"
+            + "- 当前采集到的附图数量：" + images.size() + "。\n"
+            + "- 本次实际发送给模型的附图数量：" + (sendImages ? images.size() : 0) + "。\n\n"
             + "原始输入数据如下：\n"
             + contextJson;
     }
@@ -338,11 +345,18 @@ public class DetectionRecordAiAnalysisService {
 
         List<Object> userContent = new ArrayList<>();
         userContent.add(Map.of("type", "text", "text", prompt));
-        for (ImageSnapshot image : images) {
-            userContent.add(Map.of("type", "text", "text", image.label()));
+        if (supportsImageInputs()) {
+            for (ImageSnapshot image : images) {
+                userContent.add(Map.of("type", "text", "text", image.label()));
+                userContent.add(Map.of(
+                    "type", "image_url",
+                    "image_url", Map.of("url", image.dataUri())
+                ));
+            }
+        } else if (!images.isEmpty()) {
             userContent.add(Map.of(
-                "type", "image_url",
-                "image_url", Map.of("url", image.dataUri())
+                "type", "text",
+                "text", "注意：当前接入模型不支持 image_url 输入，本次没有向模型发送图片，只能基于文本上下文研判。"
             ));
         }
 
@@ -358,7 +372,7 @@ public class DetectionRecordAiAnalysisService {
         String requestBody = objectMapper.writeValueAsString(payload);
 
         HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create(trimTrailingSlash(aiAnalysisBaseUrl) + "/v1/chat/completions"))
+            .uri(buildChatCompletionsUri())
             .timeout(Duration.ofSeconds(180))
             .header("Authorization", "Bearer " + aiAnalysisApiKey)
             .header("Content-Type", "application/json")
@@ -493,6 +507,27 @@ public class DetectionRecordAiAnalysisService {
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private boolean supportsImageInputs() {
+        return aiAnalysisEnableImages;
+    }
+
+    private URI buildChatCompletionsUri() {
+        String base = trimTrailingSlash(aiAnalysisBaseUrl);
+        if (base.isEmpty()) {
+            throw new IllegalStateException("AI分析 base URL 为空");
+        }
+        if (base.endsWith("/anthropic")) {
+            throw new IllegalStateException("当前 AI 分析仅支持 OpenAI 兼容接口，请配置 openai_url，而不是 anthropic_url");
+        }
+        if (base.endsWith("/chat/completions") || base.endsWith("/v1/chat/completions")) {
+            return URI.create(base);
+        }
+        if (base.endsWith("/v1") || base.endsWith("/v2")) {
+            return URI.create(base + "/chat/completions");
+        }
+        return URI.create(base + "/v1/chat/completions");
     }
 
     private String safeMessage(Exception e) {
