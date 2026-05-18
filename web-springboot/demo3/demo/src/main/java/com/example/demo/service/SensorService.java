@@ -90,7 +90,7 @@ public class SensorService {
             // 初始化默认阈值
             thresholds.put("temperature", 35.0f);
             thresholds.put("humidity", 60.0f);
-            thresholds.put("smoke", 60.0f);
+            thresholds.put("smoke", 400.0f);
             thresholds.put("light", 600.0f);
             // 保存默认阈值到数据库
             saveThresholdToDb();

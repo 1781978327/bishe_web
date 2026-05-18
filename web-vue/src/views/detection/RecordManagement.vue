@@ -809,6 +809,7 @@ const processRules = {
 // 检测结果解析
 const parsedDetectionResult = computed(() => {
   if (!currentRecord.value?.detectionResult) return null
+  if (isSoundRecord.value) return null
   try {
     return JSON.parse(currentRecord.value.detectionResult)
   } catch (e) {

@@ -57,6 +57,7 @@ void handle_realtime_start(int client_fd, const char *body) {
     int ret = rt_start(device);
     char result[512];
     if (ret == 0) {
+        (void)emergency_kws_start();
         pthread_mutex_lock(&rt_mutex);
         char actual_device[256];
         strncpy(actual_device, rt_device, sizeof(actual_device) - 1);
@@ -79,6 +80,7 @@ void handle_realtime_start(int client_fd, const char *body) {
 
 void handle_realtime_stop(int client_fd) {
     printf("[HTTP] POST /realtime/stop\n");
+    (void)emergency_kws_stop();
     rt_stop();
     char result[256];
     snprintf(result, sizeof(result), "{\"success\": true, \"message\": \"Realtime monitoring stopped\"}");

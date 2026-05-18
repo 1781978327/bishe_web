@@ -10,6 +10,7 @@ import com.example.demo.entity.DetectionRecord;
 import com.example.demo.repository.CameraRepository;
 import com.example.demo.repository.DetectionRecordRepository;
 import com.example.demo.service.DetectionRecordAiAnalysisService;
+import com.example.demo.service.SoundService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,7 @@ public class DetectionRecordController {
     private final DetectionRecordRepository detectionRecordRepository;
     private final CameraRepository cameraRepository;
     private final DetectionRecordAiAnalysisService detectionRecordAiAnalysisService;
+    private final SoundService soundService;
 
     @PostMapping
     public Result<Boolean> add(@Valid @RequestBody DetectionRecordAddRequest request) {
@@ -301,6 +303,11 @@ public class DetectionRecordController {
     @PostMapping("/sound/report")
     public Result<Boolean> reportSoundAnomaly(@RequestBody SoundAnomalyReportRequest request) {
         try {
+            if (isMonitoringSoundReport(request) && !soundService.isAcceptingMonitoringReports()) {
+                log.info("声音监测已关闭，忽略自动声音上报: {}", request.getDetectionResult());
+                return Result.success(false);
+            }
+
             DetectionRecord record = new DetectionRecord();
             
             // 声音监测使用 cameraId = -1 表示声音监测设备
@@ -330,5 +337,10 @@ public class DetectionRecordController {
             log.error("声音异常上报失败", e);
             return Result.error(500, "上报失败: " + e.getMessage());
         }
+    }
+
+    private boolean isMonitoringSoundReport(SoundAnomalyReportRequest request) {
+        String source = request.getSource();
+        return source == null || source.isBlank() || "monitoring".equalsIgnoreCase(source);
     }
 }

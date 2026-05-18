@@ -14,6 +14,7 @@
 static std::atomic<int> g_block_flag{0};
 static uint32 g_dht_databuf = 0;
 static DhtReadResult g_last_dht_result;
+constexpr float TEMPERATURE_CALIBRATION_OFFSET_C = -5.0f;
 
 static float randomizeLowHumidityReading() {
     static thread_local std::mt19937 rng(
@@ -197,7 +198,9 @@ int readDht11Threaded(float& temperature, float& humidity) {
     }
 
     humidity = g_last_dht_result.humidity_int + g_last_dht_result.humidity_dec * 0.1f;
-    temperature = g_last_dht_result.temperature_int + g_last_dht_result.temperature_dec * 0.1f;
+    temperature = g_last_dht_result.temperature_int +
+                  g_last_dht_result.temperature_dec * 0.1f +
+                  TEMPERATURE_CALIBRATION_OFFSET_C;
     if (humidity < MIN_REPORTED_HUMIDITY_PERCENT) {
         humidity = randomizeLowHumidityReading();
     }

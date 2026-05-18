@@ -47,6 +47,8 @@ public class SoundService {
 
     private final AtomicBoolean httpServerAvailable = new AtomicBoolean(false);
     private final AtomicBoolean monitoringEnabled = new AtomicBoolean(false);
+    private final AtomicBoolean acceptingMonitoringReports = new AtomicBoolean(false);
+    private final AtomicBoolean monitoringStopRequested = new AtomicBoolean(false);
     private volatile SoundEvent latestEvent;
 
     @PostConstruct
@@ -62,6 +64,8 @@ public class SoundService {
         }
 
         refreshHttpServerAvailability();
+        syncMonitoringEnabledFromSoundStatus();
+        acceptingMonitoringReports.set(monitoringEnabled.get());
     }
 
     private boolean refreshHttpServerAvailability() {
@@ -97,13 +101,39 @@ public class SoundService {
 
     public Map<String, Object> getMonitoringStatus() {
         refreshHttpServerAvailability();
-        syncMonitoringEnabledFromRealtimeStatus();
+        Map<String, Object> realtimeStatus = fetchSoundServerStatus("/realtime/status");
+        Map<String, Object> wakeStatus = fetchSoundServerStatus("/wake/status");
+        boolean realtimeRunning = isRunningStatus(realtimeStatus);
+        boolean wakeRunning = isRunningStatus(wakeStatus);
+        boolean enabled = realtimeRunning || wakeRunning;
+        monitoringEnabled.set(enabled);
+        if (enabled && !monitoringStopRequested.get()) {
+            acceptingMonitoringReports.set(true);
+        } else if (!enabled) {
+            acceptingMonitoringReports.set(false);
+        }
+
         Map<String, Object> status = new HashMap<>();
         status.put("httpServerAvailable", httpServerAvailable.get());
         status.put("httpServerUrl", String.format("http://%s:%d", soundServerHost, soundServerPort));
-        status.put("enabled", monitoringEnabled.get());
+        status.put("enabled", enabled);
+        status.put("acceptingMonitoringReports", acceptingMonitoringReports.get());
+        status.put("realtimeRunning", realtimeRunning);
+        status.put("wakeRunning", wakeRunning);
+        status.put("realtime", realtimeStatus);
+        status.put("wake", wakeStatus);
         status.put("latestEvent", latestEvent);
         return status;
+    }
+
+    public boolean isAcceptingMonitoringReports() {
+        if (!monitoringStopRequested.get() && !acceptingMonitoringReports.get()) {
+            syncMonitoringEnabledFromSoundStatus();
+            if (monitoringEnabled.get()) {
+                acceptingMonitoringReports.set(true);
+            }
+        }
+        return acceptingMonitoringReports.get();
     }
 
     @SuppressWarnings("unchecked")
@@ -236,91 +266,57 @@ public class SoundService {
     }
 
     public boolean startMonitoring() {
-        log.info("[SoundService] 启动实时监测模式");
+        log.info("[SoundService] 启动声音监测模式（实时异常 + 紧急关键词）");
+        monitoringStopRequested.set(false);
+        acceptingMonitoringReports.set(false);
         if (!refreshHttpServerAvailability()) {
             log.error("HTTP server not available");
             return false;
         }
 
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL(String.format("http://%s:%d/realtime/start", soundServerHost, soundServerPort));
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-            conn.setConnectTimeout(5000);
-            conn.setReadTimeout(10000);
+        boolean realtimeOk = postSoundServerControl("/realtime/start", "实时监测启动", true);
+        boolean wakeOk = postSoundServerControl("/wake/start", "紧急关键词监听启动", true);
 
-            log.info("[SoundService] 发送请求到 C++ 实时监测服务: POST {}", url);
-
-            int responseCode = conn.getResponseCode();
-            log.info("[SoundService] 实时监测响应码: {}", responseCode);
-
-            String responseBody = readConnectionBody(conn);
-            log.info("[SoundService] 实时监测响应: {}", responseBody);
-
-            if (responseCode == 200) {
-                log.info("[SoundService] ✓ 实时监测已启动");
-                monitoringEnabled.set(true);
-                return true;
-            } else if (responseCode == 409 || responseBody.contains("Already running")) {
-                // 已经是运行状态，视为成功（幂等性）
-                log.info("[SoundService] ✓ 实时监测已在运行中");
-                monitoringEnabled.set(true);
-                return true;
-            } else {
-                log.error("[SoundService] ✗ 启动实时监测失败: {}", responseBody);
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("[SoundService] 调用实时监测启动接口失败: {}", e.getMessage());
-            return false;
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
+        syncMonitoringEnabledFromSoundStatus();
+        if (realtimeOk && wakeOk) {
+            log.info("[SoundService] ✓ 声音监测已启动");
+            monitoringEnabled.set(true);
+            acceptingMonitoringReports.set(true);
+            return true;
         }
+
+        log.error("[SoundService] ✗ 声音监测启动不完整: realtimeOk={}, wakeOk={}", realtimeOk, wakeOk);
+        monitoringStopRequested.set(true);
+        acceptingMonitoringReports.set(false);
+        postSoundServerControl("/realtime/stop", "回滚实时监测启动", false);
+        postSoundServerControl("/wake/stop", "回滚紧急关键词监听启动", false);
+        syncMonitoringEnabledFromSoundStatus();
+        return false;
     }
 
     public boolean stopMonitoring() {
-        log.info("[SoundService] 停止实时监测模式");
+        log.info("[SoundService] 停止声音监测模式（实时异常 + 紧急关键词）");
+        monitoringStopRequested.set(true);
+        acceptingMonitoringReports.set(false);
 
         if (!refreshHttpServerAvailability()) {
-            log.error("[SoundService] HTTP server not available, cannot stop realtime monitoring");
+            log.warn("[SoundService] HTTP server not available, mark sound monitoring disabled locally");
             monitoringEnabled.set(false);
-            return false;
+            return true;
         }
 
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL(String.format("http://%s:%d/realtime/stop", soundServerHost, soundServerPort));
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-            conn.setConnectTimeout(5000);
-            conn.setReadTimeout(10000);
+        boolean realtimeOk = postSoundServerControl("/realtime/stop", "实时监测停止", false);
+        boolean wakeOk = postSoundServerControl("/wake/stop", "紧急关键词监听停止", false);
 
-            log.info("[SoundService] 发送请求到 C++ 实时监测服务: POST {}", url);
-
-            int responseCode = conn.getResponseCode();
-            log.info("[SoundService] 停止监测响应码: {}", responseCode);
-
-            if (responseCode == 200) {
-                log.info("[SoundService] ✓ 实时监测已停止");
-                monitoringEnabled.set(false);
-                return true;
-            } else {
-                syncMonitoringEnabledFromRealtimeStatus();
-                return false;
-            }
-        } catch (Exception e) {
-            log.error("[SoundService] 调用实时监测停止接口失败: {}", e.getMessage());
-            return false;
-        } finally {
-            if (conn != null) {
-                conn.disconnect();
-            }
+        syncMonitoringEnabledFromSoundStatus();
+        if (realtimeOk && wakeOk && !monitoringEnabled.get()) {
+            log.info("[SoundService] ✓ 声音监测已停止");
+            return true;
         }
+
+        log.error("[SoundService] ✗ 声音监测停止不完整: realtimeOk={}, wakeOk={}, enabled={}",
+            realtimeOk, wakeOk, monitoringEnabled.get());
+        return false;
     }
 
     /**
@@ -484,6 +480,7 @@ public class SoundService {
             request.setAudioUrl(event.getAudioPath());
             request.setAudioDuration(event.getDuration());
             request.setSoundKeywords(event.getKeywords());
+            request.setSource("manual");
 
             String url = String.format("http://localhost:%s/api/detection/record/sound/report", springbootServerPort);
             HttpHeaders headers = new HttpHeaders();
@@ -524,36 +521,95 @@ public class SoundService {
     }
 
     private void syncMonitoringEnabledFromRealtimeStatus() {
+        Map<String, Object> status = fetchSoundServerStatus("/realtime/status");
+        monitoringEnabled.set(isRunningStatus(status));
+    }
+
+    private void syncMonitoringEnabledFromSoundStatus() {
+        Map<String, Object> realtimeStatus = fetchSoundServerStatus("/realtime/status");
+        Map<String, Object> wakeStatus = fetchSoundServerStatus("/wake/status");
+        monitoringEnabled.set(isRunningStatus(realtimeStatus) || isRunningStatus(wakeStatus));
+    }
+
+    private boolean postSoundServerControl(String path, String actionName, boolean allowAlreadyRunning) {
         HttpURLConnection conn = null;
         try {
-            URL url = new URL(String.format("http://%s:%d/realtime/status", soundServerHost, soundServerPort));
+            URL url = new URL(String.format("http://%s:%d%s", soundServerHost, soundServerPort, path));
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(10000);
+
+            log.info("[SoundService] 发送请求到 C++ 声音服务: POST {}", url);
+
+            int responseCode = conn.getResponseCode();
+            String responseBody = readConnectionBody(conn);
+            log.info("[SoundService] {}响应码: {}, 响应: {}", actionName, responseCode, responseBody);
+
+            httpServerAvailable.set(true);
+            if (responseCode >= 200 && responseCode < 300) {
+                return true;
+            }
+
+            if (allowAlreadyRunning && (responseCode == 409 || responseBody.contains("Already running"))) {
+                return true;
+            }
+
+            log.error("[SoundService] {}失败: {}", actionName, responseBody);
+            return false;
+        } catch (Exception e) {
+            log.error("[SoundService] 调用{}接口失败: {}", actionName, e.getMessage());
+            return false;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> fetchSoundServerStatus(String path) {
+        Map<String, Object> status = new HashMap<>();
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(String.format("http://%s:%d%s", soundServerHost, soundServerPort, path));
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(3000);
             conn.setReadTimeout(3000);
 
             int responseCode = conn.getResponseCode();
-            if (responseCode != 200) {
-                httpServerAvailable.set(false);
-                return;
-            }
-
-            httpServerAvailable.set(true);
             String response = readConnectionBody(conn);
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            Map<String, Object> result = mapper.readValue(response, Map.class);
-            Object running = result.get("running");
-            if (running instanceof Boolean runningFlag) {
-                monitoringEnabled.set(runningFlag);
+            status.put("httpStatus", responseCode);
+
+            if (responseCode == 200 && response != null && !response.isBlank()) {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                status.putAll(mapper.readValue(response, Map.class));
+                httpServerAvailable.set(true);
+            } else {
+                status.put("success", false);
+                status.put("error", response == null || response.isBlank() ? "empty response" : response);
+                if (responseCode != 200) {
+                    httpServerAvailable.set(false);
+                }
             }
         } catch (Exception e) {
+            status.put("success", false);
+            status.put("error", e.getMessage());
             httpServerAvailable.set(false);
-            log.debug("[SoundService] 同步实时状态失败: {}", e.getMessage());
+            log.debug("[SoundService] 获取声音服务状态失败 {}: {}", path, e.getMessage());
         } finally {
             if (conn != null) {
                 conn.disconnect();
             }
         }
+        return status;
+    }
+
+    private boolean isRunningStatus(Map<String, Object> status) {
+        Object running = status.get("running");
+        return running instanceof Boolean runningFlag && runningFlag;
     }
 
     private String readConnectionBody(HttpURLConnection conn) throws IOException {

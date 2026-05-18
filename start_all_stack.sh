@@ -209,6 +209,9 @@ cleanup_sound_residuals() {
   fi
   echo "[sound_http] 清理残留的声音服务进程..."
   sudo -n pkill -f 'rknn_yamnet_demo_http' 2>/dev/null || true
+  sudo -n pkill -f '/Sound_Monitoring/.*/wake/emergency_monitor' 2>/dev/null || true
+  sudo -n pkill -f '(^|[[:space:]/])emergency_monitor([[:space:]]|$)' 2>/dev/null || true
+  sudo -n rm -f /tmp/emergency_monitor.pid 2>/dev/null || true
   sleep 1
 }
 

@@ -355,12 +355,10 @@ int emergency_kws_start() {
 }
 
 int emergency_kws_stop() {
+    (void)emergency_kws_reporter_stop();
     pthread_mutex_lock(&g_emergency_kws_mutex);
     int ret = emergency_kws_stop_locked();
     pthread_mutex_unlock(&g_emergency_kws_mutex);
-    if (ret == 0 || ret == 1) {
-        (void)emergency_kws_reporter_stop();
-    }
     return ret;
 }
 

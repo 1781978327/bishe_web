@@ -64,12 +64,13 @@ static bool readAds1115ChannelMedian(int fd, uint8_t channel, int16_t& raw) {
 
 static float calculateSmokePPM(float voltage) {
     if (voltage <= 0.001f) return 0.0f;
+    if (voltage >= VCC - 0.001f) return 9999.0f;
+
     float rs = RL * (VCC - voltage) / voltage;
-    float ro = 10000.0f;
-    float ratio = rs / ro;
-    if (ratio <= 0.0f) return 0.0f;
-    if (ratio > 20.0f) ratio = 20.0f;
-    return 1000.0f * std::pow(ratio, -1.55f);
+    constexpr float R0 = 106000.0f;
+    if (rs <= 0.0f) return 0.0f;
+
+    return std::pow(21.72f * R0 / rs, 2.1101f);
 }
 
 static float calculateLightLux(float voltage) {
